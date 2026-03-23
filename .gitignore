@@ -45,3 +45,21 @@ experiments/exp-why-extraction/funNLP/
 
 # OpenClaw test data
 openclaw-test/
+
+# Cloned experiment repos (large, not ours)
+experiments/*/artifacts/_repo/
+experiments/*/soul-extractor-output/artifacts/_repo/
+
+# Runtime logs
+logs/
+
+# Model weights
+*.bin
+*.pt
+*.npz
+*.safetensors
+
+# Secrets
+secrets.json
+*.key
+*.pem
