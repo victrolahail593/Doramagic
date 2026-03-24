@@ -2,19 +2,13 @@
 name: dora
 description: >
   Doramagic — extract design wisdom from open-source projects and forge skills.
-version: 9.0.0
+version: 9.2.0
 user-invocable: true
 tags: [doramagic, knowledge-extraction, skill-generation]
-metadata:
-  openclaw:
-    skillKey: dora
-    category: builder
-    requires:
-      bins: [python3]
-    storage_root: ~/clawd/doramagic/runs/
+metadata: {"openclaw":{"emoji":"🪄","skillKey":"dora","category":"builder","requires":{"bins":["python3"],"env":["ANTHROPIC_API_KEY"]},"primaryEnv":"ANTHROPIC_API_KEY","install":[{"id":"uv","kind":"pip","package":"uv","bins":["uv"],"label":"Install uv (Python package runner)"}]}}
 ---
 
-python3 ~/.openclaw/skills/soul-extractor/scripts/doramagic_main.py --input "{args}" --run-dir ~/clawd/doramagic/runs/
+uv run {baseDir}/scripts/doramagic_main.py --input "{args}" --run-dir ~/.doramagic/runs/
 
 ---
 
@@ -27,7 +21,7 @@ Show the `message` field to the user exactly as-is.
 
 ### Clarification output
 If output has `"clarification": true`, show the `question` field and wait for user's answer.
-Then re-invoke with: `python3 ~/.openclaw/skills/soul-extractor/scripts/doramagic_main.py --continue {run_id} --input "{user_answer}" --run-dir ~/clawd/doramagic/runs/`
+Then re-invoke with: `uv run {baseDir}/scripts/doramagic_main.py --continue {run_id} --input "{user_answer}" --run-dir ~/.doramagic/runs/`
 
 ### Progress output
 If output has `"progress": true`, show the `message` field as a status update. More output will follow.

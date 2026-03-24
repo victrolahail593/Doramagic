@@ -2,6 +2,26 @@
 
 All notable changes to Doramagic are documented in this file.
 
+## [9.2.0] - 2026-03-24
+
+### Added
+- Mermaid pipeline diagrams in README (top-level flow + extraction internals)
+- Implementation highlights with code snippets in README
+- Example output section showing real TandoorRecipes extraction
+- GitHub Actions CI (pytest on push/PR, Python 3.12)
+- Routing decision logging in CapabilityRouter (get_routing_summary())
+- CI badge support
+
+### Changed
+- brick_injection.py: expanded framework mappings from 12 to 34 domains
+- SKILL.md: fixed entry point path, updated to v9.2.0
+- README: updated brick count to 278, added architecture visualization
+
+### Fixed
+- SKILL.md entry point was pointing to deprecated soul-extractor path
+- Brick count assertion in tests updated for 278 bricks
+- Makefile PYTHONPATH for cross-package test imports
+
 ## [9.1.0] - 2026-03-24
 
 ### Added

@@ -1,5 +1,7 @@
 # Doramagic
 
+[![CI](https://github.com/tangweigang-jpg/Doramagic/actions/workflows/ci.yml/badge.svg)](https://github.com/tangweigang-jpg/Doramagic/actions/workflows/ci.yml)
+
 > **不教用户做事，给他工具。** — Doramagic 的产品设计之魂
 
 Doramagic 是运行在 OpenClaw 上的哆啦A梦——用户说出模糊烦恼，Doramagic 从开源世界找最好作业，提取智慧，锻造开袋即食的 AI 道具。
@@ -97,7 +99,7 @@ packages/
 ├── skill_compiler/     # OpenClaw skill compilation
 └── platform_openclaw/  # Platform validation
 
-bricks/                 # 89 knowledge bricks across 12 frameworks/domains
+bricks/                 # 278 knowledge bricks across 34 frameworks/domains
 skills/soul-extractor/  # OpenClaw skill definition (SKILL.md + stages)
 ```
 
