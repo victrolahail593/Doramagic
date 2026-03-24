@@ -10,7 +10,7 @@ typecheck:
 	python3 -m mypy packages/contracts/doramagic_contracts/
 
 test:
-	uv run python3 -m pytest tests/ packages/ -v
+	.venv/bin/python -m pytest tests/ packages/ -v
 
 check: lint typecheck test
 
