@@ -67,6 +67,25 @@ fi
 
 # ─── Step 3: Build clean export ──────────────────────────────────
 
+# ─── Step 2.5: Package self-contained skill ──────────────────────
+
+echo ""
+echo "▶ Step 2.5: Packaging self-contained skill"
+
+PACKAGE_SCRIPT="$PROJECT_ROOT/scripts/release/package_skill.sh"
+if [[ -x "$PACKAGE_SCRIPT" ]]; then
+    bash "$PACKAGE_SCRIPT"
+    echo "  ✓ Skill packaged"
+    # Commit packaged skill if changed
+    if [[ -n "$(git status --porcelain skills/doramagic/)" ]]; then
+        git add skills/doramagic/
+        git commit -q -m "chore: package self-contained skill for release"
+        echo "  ✓ Packaged skill committed"
+    fi
+else
+    echo "  ⚠ package_skill.sh not found, skipping"
+fi
+
 echo ""
 echo "▶ Step 3: Building clean export"
 

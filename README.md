@@ -147,23 +147,162 @@ def run_dsd_checks(cards, repo_facts, community_signals) -> DSDReport:
 
 ## Quick Start
 
-```bash
-# Clone
-git clone https://github.com/tangweigang-jpg/Doramagic.git
-cd doramagic
+Doramagic v9.2.0 is a **skill-forging skill**: you describe the expert you want, Doramagic runs its 8-phase pipeline from **A→H**, searches GitHub for the best open-source references, extracts design philosophy and community UNSAID knowledge, and forges a **Skill bundle** you can install.
 
-# Install dependencies
-pip install pydantic
+The first output is **not** an app, a one-off Markdown report, or a pile of notes. The first output is a **Skill**: `SKILL.md` plus its knowledge pack, so that after installation your AI assistant behaves like a domain expert.
 
-# Configure your models
-cp models.json.example models.json
-# Edit models.json with your API keys
+### Experience First
 
-# Run the soul extractor on a project
-python3 packages/orchestration/doramagic_orchestration/phase_runner.py \
-  --repo-path /path/to/target/repo \
-  --output-dir ./output
+```text
+User
+/dora 我想做一个管理家庭菜谱和每周菜单的 Skill。Please learn from https://github.com/TandoorRecipes/recipes and https://github.com/mealie-recipes/mealie . 中文优先，适合家庭使用。
+
+Doramagic
+收到。我会进入 8-Phase 锻造流程：需求理解 → GitHub 搜索 → 多项目提取 → 跨项目综合 → Skill 编译 → 门控验证 → 交付。
+
+Doramagic
+需要一个关键澄清：你更在意“家庭协作”还是“菜谱导入/导出”？
+
+User
+家庭协作优先，手机对话体验优先。
+
+Doramagic
+锻造完成。交付物是一个 Skill bundle，而不是普通文件：
+- SKILL.md
+- README.md
+- PROVENANCE.md
+- LIMITATIONS.md
+
+下一步：把这个 bundle 安装进你的 OpenClaw / Claude Code skill 目录。
+安装后，你的 AI 助手会变成这个领域的专家级顾问。
 ```
+
+安装生成的 Skill 之后，你会继续这样用它：
+
+```text
+/family-menu-coach 我冰箱里有鸡腿、土豆和番茄，给我安排 3 天晚餐，并解释为什么这么搭配。
+```
+
+### 1. OpenClaw
+
+Keep the full repo checkout in a stable path, then link the Doramagic skill into your OpenClaw skills directory:
+
+```bash
+git clone https://github.com/tangweigang-jpg/Doramagic.git ~/Doramagic
+mkdir -p ~/.openclaw/skills
+cp -r ~/Doramagic/skills/doramagic ~/.openclaw/skills/dora
+```
+
+Then invoke Doramagic in OpenClaw:
+
+```text
+/dora 我想做一个帮助团队审查 API 设计的 Skill。Please benchmark https://github.com/fastapi/fastapi and https://github.com/encode/django-rest-framework . 输出给中文团队使用。
+```
+
+Typical flow:
+
+```text
+User
+/dora 我想做一个帮助团队审查 API 设计的 Skill。Please benchmark https://github.com/fastapi/fastapi and https://github.com/encode/django-rest-framework . 输出给中文团队使用。
+
+Doramagic
+我会先锁定 API style、schema discipline、error contract、community pitfalls 这几个方向。
+
+Doramagic
+请确认重点：你更想要“设计审查顾问”还是“直接生成接口代码的助手”？
+
+User
+设计审查顾问。
+
+Doramagic
+完成。已锻造 Skill bundle。把 delivery 目录安装到你的 skill 目录后，AI 会变成 API review specialist。
+```
+
+### 2. Claude Code
+
+Use the same repo checkout, and link the Doramagic skill into Claude Code manually:
+
+```bash
+git clone https://github.com/tangweigang-jpg/Doramagic.git ~/Doramagic
+mkdir -p ~/.claude/skills
+cp -r ~/Doramagic/skills/doramagic ~/.claude/skills/dora
+```
+
+Restart Claude Code, then invoke:
+
+```text
+/dora 我想做一个管理个人知识库和阅读摘要的 Skill。Please learn from https://github.com/obsidianmd/obsidian-releases and https://github.com/logseq/logseq . 中文优先，强调知识组织而不是笔记堆积。
+```
+
+Typical flow:
+
+```text
+User
+/dora 我想做一个管理个人知识库和阅读摘要的 Skill。Please learn from https://github.com/obsidianmd/obsidian-releases and https://github.com/logseq/logseq . 中文优先，强调知识组织而不是笔记堆积。
+
+Doramagic
+我会重点提取：链接结构、知识演化、社区常见踩坑、从“记录”到“复用”的转变。
+
+Doramagic
+你更希望这个 Skill 面向“重度研究者”还是“日常工作知识管理”？
+
+User
+日常工作知识管理。
+
+Doramagic
+锻造完成。产出物是 Skill bundle，不是单个文档。安装后，你可以直接把 AI 当成 PKM advisor 使用。
+```
+
+### 3. Python CLI / Local Forge Mode
+
+If you want to run Doramagic directly from source for local testing:
+
+```bash
+git clone https://github.com/tangweigang-jpg/Doramagic.git ~/Doramagic
+cd ~/Doramagic
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+pip install anthropic openai google-genai
+python3 skills/doramagic/scripts/doramagic_main.py --cli \
+  --run-dir ~/clawd/doramagic/runs \
+  --input "我想做一个健身与饮食指导 Skill。Please learn from https://github.com/wger-project/wger and https://github.com/TandoorRecipes/recipes . 中文优先，强调长期习惯而不是短期打卡。"
+```
+
+This source mode runs the same forge pipeline and produces the same **Skill bundle**. If you want the slash-command experience, link the same checkout into OpenClaw or Claude Code and then use `/dora`:
+
+```text
+/dora 我想做一个健身与饮食指导 Skill。Please learn from https://github.com/wger-project/wger and https://github.com/TandoorRecipes/recipes . 中文优先，强调长期习惯而不是短期打卡。
+```
+
+Typical flow:
+
+```text
+User
+/dora 我想做一个健身与饮食指导 Skill。Please learn from https://github.com/wger-project/wger and https://github.com/TandoorRecipes/recipes . 中文优先，强调长期习惯而不是短期打卡。
+
+Doramagic
+我会综合训练记录、营养管理、用户坚持成本、社区常见失败模式。
+
+Doramagic
+请确认：你更关注“记录准确性”还是“用户可坚持性”？
+
+User
+用户可坚持性。
+
+Doramagic
+完成。已生成 Skill bundle。安装这个 Skill 后，你的 AI 助手会从通用聊天机器人变成 habit-oriented fitness advisor。
+```
+
+### What You Get
+
+Doramagic ships with **278 knowledge bricks across 34 frameworks/domains** and compiles the final output into an installable Skill bundle. In practice, the workflow is always:
+
+1. Use `/dora` to describe the expert you want.
+2. Let Doramagic forge the Skill.
+3. Install the generated Skill bundle manually.
+4. Use the generated Skill so your AI assistant becomes an expert advisor in that domain.
+
 
 ## Key Concepts
 
