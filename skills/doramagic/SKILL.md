@@ -4,6 +4,7 @@ description: >
   Doramagic — extract design wisdom from open-source projects and forge skills.
 version: 9.2.0
 user-invocable: true
+license: MIT
 tags: [doramagic, knowledge-extraction, skill-generation]
 metadata: {"openclaw":{"emoji":"🪄","skillKey":"dora","category":"builder","requires":{"bins":["python3"],"env":["ANTHROPIC_API_KEY"]},"primaryEnv":"ANTHROPIC_API_KEY","install":[{"id":"uv","kind":"pip","package":"uv","bins":["uv"],"label":"Install uv (Python package runner)"}]}}
 ---
