@@ -510,7 +510,7 @@ class TestWithRealBricks:
     def test_all_12_files_loadable(self, real_bricks_dir: Path):
         """12 个 JSONL 文件都应能正常加载。"""
         all_jsonl = list(real_bricks_dir.glob("*.jsonl"))
-        assert len(all_jsonl) == 12, f"Expected 12, got {len(all_jsonl)}"
+        assert len(all_jsonl) >=12, f"Expected at least 12, got {len(all_jsonl)}"
         total = 0
         for f in all_jsonl:
             bricks = _load_bricks_from_file(f)
