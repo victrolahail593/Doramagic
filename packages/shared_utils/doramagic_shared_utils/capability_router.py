@@ -35,6 +35,67 @@ _TASK_TO_CAPABILITIES = {
 
 COST_TIER_ORDER = {"low": 0, "medium": 1, "high": 2}
 
+from datetime import datetime, timezone
+
+# ─── Routing Decision Log ────────────────────────────────────────
+
+@dataclass
+class RoutingDecision:
+    """Records a single model routing decision for transparency."""
+    stage: str
+    required_capabilities: list[str]
+    selected_model: str
+    provider: str
+    cost_tier: str
+    is_degraded: bool
+    reason: str
+    alternatives: list[str]
+    timestamp: str = ""
+
+    def __post_init__(self):
+        if not self.timestamp:
+            self.timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+# Module-level routing log (reset between runs)
+_routing_log: list[RoutingDecision] = []
+
+
+def reset_routing_log() -> None:
+    """Clear the routing log. Call at the start of each pipeline run."""
+    _routing_log.clear()
+
+
+def get_routing_log() -> list[RoutingDecision]:
+    """Return the current routing log (read-only copy)."""
+    return list(_routing_log)
+
+
+def get_routing_summary() -> str:
+    """Return a markdown summary of all routing decisions made in this run."""
+    if not _routing_log:
+        return ""
+
+    lines = [
+        "## Model Routing Decisions",
+        "",
+        "| Stage | Capabilities | Selected | Provider | Cost | Degraded | Reason |",
+        "|-------|-------------|----------|----------|------|----------|--------|",
+    ]
+    for d in _routing_log:
+        caps = ", ".join(d.required_capabilities) if d.required_capabilities else "deterministic"
+        deg = "yes" if d.is_degraded else "no"
+        lines.append(
+            f"| {d.stage} | {caps} | {d.selected_model} | {d.provider} | {d.cost_tier} | {deg} | {d.reason} |"
+        )
+
+    lines.append("")
+    lines.append(f"*Decisions: {len(_routing_log)} | "
+                 f"Degraded: {sum(1 for d in _routing_log if d.is_degraded)}*")
+    return "\n".join(lines)
+
+
+
 
 @dataclass
 class ModelDeclaration:
@@ -125,23 +186,46 @@ class CapabilityRouter:
 
         if perfect:
             selected = self._select_by_preference(perfect)
-            return RoutingResult(
+            alternatives = [m.model_id for m in perfect if m.model_id != selected.model_id]
+            result = RoutingResult(
                 model_id=selected.model_id,
                 provider=selected.provider,
                 cost_tier=selected.cost_tier,
             )
+            _routing_log.append(RoutingDecision(
+                stage=getattr(self, "_current_stage", "unknown"),
+                required_capabilities=list(required_capabilities),
+                selected_model=selected.model_id,
+                provider=selected.provider,
+                cost_tier=selected.cost_tier,
+                is_degraded=False,
+                reason=self.preference,
+                alternatives=alternatives,
+            ))
+            return result
 
         # 无完美匹配 — 降级
         if self.fallback_strategy == "degrade_and_warn":
             best = max(self.models, key=lambda m: m.capability_coverage(required_capabilities))
             missing = [cap for cap in required_capabilities if cap not in best.capabilities]
-            return RoutingResult(
+            result = RoutingResult(
                 model_id=best.model_id,
                 provider=best.provider,
                 is_degraded=True,
                 missing_capabilities=missing,
                 cost_tier=best.cost_tier,
             )
+            _routing_log.append(RoutingDecision(
+                stage=getattr(self, "_current_stage", "unknown"),
+                required_capabilities=list(required_capabilities),
+                selected_model=best.model_id,
+                provider=best.provider,
+                cost_tier=best.cost_tier,
+                is_degraded=True,
+                reason=f"degraded: missing {missing}",
+                alternatives=[],
+            ))
+            return result
 
         # strict 模式：无匹配则报错
         raise RuntimeError(
@@ -179,6 +263,7 @@ class CapabilityRouter:
         if not caps:
             # 确定性 stage，返回任意模型（不会实际调用）
             return RoutingResult(model_id="deterministic", provider="none")
+        self._current_stage = stage_name
         return self.route(caps)
 
     def _select_by_preference(self, candidates: list[ModelDeclaration]) -> ModelDeclaration:
