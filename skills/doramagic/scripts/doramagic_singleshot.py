@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Doramagic Single-Shot v9.0 — LLM-powered discovery + actionable skill output.
+"""Doramagic Single-Shot v10.0 — LLM-powered discovery + actionable skill output.
+
+v10.0 changes:
+  - Added --debug flag with DebugLogger for full execution tracing
+  - Debug mode logs: stage timings, LLM prompts/responses, engine stdout/stderr
+  - LLM traces saved to {run_dir}/{run_id}/llm_traces/ as JSON files
+  - When --debug not passed, behavior is identical to v9.0
 
 v9.0 changes:
   - build_need_profile() uses LLM to generate GitHub search keywords (fixes "WiFi密码管理" bug)
@@ -18,6 +24,7 @@ v9.0 changes:
 
 用法（被 SKILL.md 调用）：
     python3 doramagic_singleshot.py --input "用户消息" --run-dir ~/clawd/doramagic/runs/
+    python3 doramagic_singleshot.py --input "用户消息" --run-dir ~/clawd/doramagic/runs/ --debug
 """
 from __future__ import annotations
 
@@ -37,6 +44,9 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 LLM_API_URL = "https://coding.dashscope.aliyuncs.com/v1/chat/completions"
 LLM_MODEL = "glm-5"
 
+# Module-level debug logger (set in main() if --debug is passed)
+_debug_logger = None
+
 
 def _get_api_key():
     """Read API key from openclaw.json (bailian provider)."""
@@ -55,12 +65,143 @@ def _output(data):
     sys.exit(0)
 
 
+# ── Debug Logger ──
+
+class DebugLogger:
+    """Debug logger for singleshot.py. Writes to debug.log and stderr.
+
+    Activated only when --debug flag is passed. When not activated, all calls
+    are no-ops and behavior is identical to non-debug mode.
+    """
+
+    def __init__(self, run_dir: Path, run_id: str):
+        self._run_dir = run_dir
+        self._run_id = run_id
+        self._log_path = run_dir / run_id / "debug.log"
+        self._traces_dir = run_dir / run_id / "llm_traces"
+        self._traces_dir.mkdir(parents=True, exist_ok=True)
+        self._log_file = open(self._log_path, "w", encoding="utf-8")
+        self._stage_timings: list[dict] = []
+        self._current_stage: str = ""
+        self._stage_start: float = 0.0
+        self._write("=" * 72)
+        self._write("Doramagic Single-Shot v10.0 — Debug Log")
+        self._write("Run ID: %s" % run_id)
+        self._write("Started: %s" % datetime.now().isoformat())
+        self._write("=" * 72)
+        self._write("")
+
+    def _write(self, msg: str):
+        """Write to both debug.log and stderr."""
+        print(msg, file=self._log_file)
+        self._log_file.flush()
+        print("[DEBUG] %s" % msg, file=sys.stderr)
+
+    def stage(self, name: str):
+        """Log a prominent stage header with timestamp. Also records timing for previous stage."""
+        now = time.time()
+        # Record timing for previous stage if there was one
+        if self._current_stage:
+            elapsed = (now - self._stage_start) * 1000
+            self._stage_timings.append({
+                "stage": self._current_stage,
+                "elapsed_ms": round(elapsed, 1),
+            })
+        self._current_stage = name
+        self._stage_start = now
+        ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        self._write("")
+        self._write("┌" + "─" * 70 + "┐")
+        self._write("│  [%s]  STAGE: %-50s │" % (ts, name))
+        self._write("└" + "─" * 70 + "┘")
+
+    def detail(self, msg: str):
+        """Log a detail line."""
+        self._write("  » %s" % msg)
+
+    def llm_call(
+        self,
+        stage: str,
+        system_prompt: str,
+        user_prompt: str,
+        response: str,
+        elapsed_ms: float,
+        model: str = LLM_MODEL,
+        tokens: dict | None = None,
+    ):
+        """Log an LLM call: summary to debug.log + full trace to llm_traces/."""
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+        trace_name = "%s_%s.json" % (re.sub(r"[^a-zA-Z0-9_-]", "_", stage), ts)
+        trace_path = self._traces_dir / trace_name
+
+        trace = {
+            "stage": stage,
+            "model": model,
+            "elapsed_ms": round(elapsed_ms, 1),
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt,
+            "raw_response": response,
+        }
+        if tokens:
+            trace["tokens"] = tokens
+        # Try to parse JSON response for convenience
+        try:
+            parsed = json.loads(response)
+            trace["parsed_response"] = parsed
+        except Exception:
+            pass
+
+        with open(trace_path, "w", encoding="utf-8") as f:
+            json.dump(trace, f, ensure_ascii=False, indent=2)
+
+        # Summary to debug.log
+        sys_preview = system_prompt[:120].replace("\n", " ")
+        user_preview = user_prompt[:120].replace("\n", " ")
+        resp_preview = response[:120].replace("\n", " ")
+        self._write("  [LLM] stage=%s model=%s elapsed=%.0fms" % (stage, model, elapsed_ms))
+        self._write("    system: %s…" % sys_preview)
+        self._write("    user:   %s…" % user_preview)
+        self._write("    resp:   %s…" % resp_preview)
+        self._write("    trace → %s" % trace_path)
+
+    def timing(self, stage: str, elapsed_ms: float):
+        """Explicitly record a timing entry (for sub-steps not tracked by stage())."""
+        self._stage_timings.append({
+            "stage": stage,
+            "elapsed_ms": round(elapsed_ms, 1),
+        })
+        self._write("  [TIMING] %s: %.0f ms" % (stage, elapsed_ms))
+
+    def summary(self):
+        """Print a table of all stages with timing at the end."""
+        # Record final stage timing
+        if self._current_stage:
+            elapsed = (time.time() - self._stage_start) * 1000
+            self._stage_timings.append({
+                "stage": self._current_stage,
+                "elapsed_ms": round(elapsed, 1),
+            })
+        self._write("")
+        self._write("=" * 72)
+        self._write("TIMING SUMMARY")
+        self._write("=" * 72)
+        total = 0.0
+        for entry in self._stage_timings:
+            self._write("  %-40s %8.0f ms" % (entry["stage"], entry["elapsed_ms"]))
+            total += entry["elapsed_ms"]
+        self._write("-" * 72)
+        self._write("  %-40s %8.0f ms" % ("TOTAL", total))
+        self._write("=" * 72)
+        self._log_file.close()
+
+
 # ── LLM API ──
 
-def call_llm(system_prompt, user_prompt, max_tokens=4096):
+def call_llm(system_prompt, user_prompt, max_tokens=4096, stage_name=None):
     """Call LLM API directly via requests. Returns response text."""
     import requests
 
+    t0 = time.time()
     resp = requests.post(
         LLM_API_URL,
         headers={
@@ -80,12 +221,28 @@ def call_llm(system_prompt, user_prompt, max_tokens=4096):
     )
     resp.raise_for_status()
     data = resp.json()
-    return data["choices"][0]["message"]["content"]
+    text = data["choices"][0]["message"]["content"]
+    elapsed_ms = (time.time() - t0) * 1000
+
+    if _debug_logger is not None and stage_name:
+        tokens = None
+        if "usage" in data:
+            tokens = data["usage"]
+        _debug_logger.llm_call(
+            stage=stage_name,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response=text,
+            elapsed_ms=elapsed_ms,
+            tokens=tokens,
+        )
+
+    return text
 
 
-def call_llm_json(system_prompt, user_prompt, max_tokens=4096):
+def call_llm_json(system_prompt, user_prompt, max_tokens=4096, stage_name=None):
     """Call LLM and parse JSON from response."""
-    text = call_llm(system_prompt, user_prompt, max_tokens)
+    text = call_llm(system_prompt, user_prompt, max_tokens, stage_name=stage_name)
     # Extract JSON from markdown code blocks
     if "```json" in text:
         text = text.split("```json", 1)[1].split("```", 1)[0]
@@ -160,7 +317,10 @@ def build_need_profile(user_input):
     # Try LLM-powered keyword generation
     try:
         _log("Generating search keywords via LLM...")
-        profile_data = call_llm_json(NEED_PROFILE_SYSTEM, clean, max_tokens=500)
+        profile_data = call_llm_json(
+            NEED_PROFILE_SYSTEM, clean, max_tokens=500,
+            stage_name="build_need_profile",
+        )
 
         domain = profile_data.get("domain", "general")
         intent_en = profile_data.get("intent_en", clean)
@@ -180,6 +340,12 @@ def build_need_profile(user_input):
         _log("LLM keywords: %s" % keywords[:8])
         _log("LLM relevance_terms: %s" % relevance_terms)
 
+        if _debug_logger is not None:
+            _debug_logger.detail("domain=%s" % domain)
+            _debug_logger.detail("keywords=%s" % keywords[:8])
+            _debug_logger.detail("relevance_terms=%s" % relevance_terms)
+            _debug_logger.detail("github_queries=%s" % github_queries)
+
         return {
             "keywords": keywords[:8],
             "domain": domain,
@@ -193,6 +359,8 @@ def build_need_profile(user_input):
 
     except Exception as e:
         _log("LLM keyword generation failed (%s), using fallback" % e)
+        if _debug_logger is not None:
+            _debug_logger.detail("LLM failed: %s — using static fallback" % e)
         return _build_need_profile_fallback(clean)
 
 
@@ -245,7 +413,7 @@ def search_clawhub(keywords):
     _log("Searching ClawHub: %s" % query)
 
     try:
-        req = Request(url, headers={"User-Agent": "Doramagic/8.1"})
+        req = Request(url, headers={"User-Agent": "Doramagic/10.0"})
         resp = urlopen(req, timeout=15)
         data = json.loads(resp.read().decode())
         results = data.get("results", [])
@@ -260,9 +428,15 @@ def search_clawhub(keywords):
                 "source": "clawhub",
             })
         _log("ClawHub: found %d skills" % len(skills))
+        if _debug_logger is not None:
+            _debug_logger.detail("ClawHub query=%r → %d skills" % (query, len(skills)))
+            for s in skills:
+                _debug_logger.detail("  clawhub skill: %s (score=%s)" % (s["slug"], s["score"]))
         return skills
     except (URLError, Exception) as e:
         _log("ClawHub search failed: %s" % e)
+        if _debug_logger is not None:
+            _debug_logger.detail("ClawHub FAILED: %s" % e)
         return []
 
 
@@ -273,6 +447,8 @@ def scan_local_skills(keywords):
     """Scan ~/.openclaw/skills/ for locally installed relevant skills."""
     skills_dir = Path.home() / ".openclaw" / "skills"
     if not skills_dir.exists():
+        if _debug_logger is not None:
+            _debug_logger.detail("local skills dir not found: %s" % skills_dir)
         return []
 
     query_lower = " ".join(keywords).lower()
@@ -308,6 +484,10 @@ def scan_local_skills(keywords):
 
     found.sort(key=lambda x: x["relevance"], reverse=True)
     _log("Local skills: found %d relevant" % len(found))
+    if _debug_logger is not None:
+        _debug_logger.detail("local skills: %d relevant found" % len(found))
+        for s in found:
+            _debug_logger.detail("  local skill: %s (relevance=%d)" % (s["name"], s["relevance"]))
     return found[:5]
 
 
@@ -324,6 +504,8 @@ def check_relevance(repos, profile):
     relevance_terms = profile.get("relevance_terms", [])
     if not relevance_terms:
         _log("No relevance_terms available, skipping relevance gate")
+        if _debug_logger is not None:
+            _debug_logger.detail("relevance gate SKIPPED (no relevance_terms)")
         return repos, []
 
     terms_lower = [t.lower() for t in relevance_terms]
@@ -343,11 +525,19 @@ def check_relevance(repos, profile):
         if matches >= 1:
             relevant.append(repo)
             _log("  ✓ %s (matched %d terms)" % (repo.get("name", "?"), matches))
+            if _debug_logger is not None:
+                _debug_logger.detail("  PASS %s (matched %d/%d terms)" % (
+                    repo.get("name", "?"), matches, len(terms_lower)))
         else:
             rejected.append(repo)
             _log("  ✗ %s (0 matches, desc: %s)" % (repo.get("name", "?"), desc[:80]))
+            if _debug_logger is not None:
+                _debug_logger.detail("  REJECT %s — 0 of %d terms matched (desc: %s)" % (
+                    repo.get("name", "?"), len(terms_lower), desc[:80]))
 
     _log("Relevance gate: %d/%d repos passed" % (len(relevant), len(repos)))
+    if _debug_logger is not None:
+        _debug_logger.detail("relevance gate result: %d/%d passed" % (len(relevant), len(repos)))
     return relevant, rejected
 
 
@@ -370,12 +560,21 @@ def collect_community_signals(repo_name, repo_url, repo_path=None):
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if result.returncode != 0:
             _log("Community signals failed for %s" % repo_name)
+            if _debug_logger is not None:
+                _debug_logger.detail("community_signals FAILED for %s: %s" % (
+                    repo_name, result.stderr[:200]))
             return None
         if output_file.exists():
             with open(output_file) as f:
-                return json.load(f)
+                data = json.load(f)
+            if _debug_logger is not None:
+                count = len(data.get("signals", []))
+                _debug_logger.detail("community_signals %s: %d signals" % (repo_name, count))
+            return data
     except Exception as e:
         _log("Community signals error for %s: %s" % (repo_name, e))
+        if _debug_logger is not None:
+            _debug_logger.detail("community_signals ERROR for %s: %s" % (repo_name, e))
     return None
 
 
@@ -464,32 +663,52 @@ def extract_soul(repo_name, repo_dir, facts):
     content = read_repo_files(repo_dir, focus)
     if not content:
         _log("No readable files for %s" % repo_name)
+        if _debug_logger is not None:
+            _debug_logger.detail("soul extraction SKIP %s — no readable files" % repo_name)
         return None
 
+    stage_name = "soul_extraction_%s" % re.sub(r"[^a-zA-Z0-9_-]", "_", repo_name)[:40]
     try:
         soul = call_llm_json(
             SOUL_SYSTEM,
             "Project: %s\n\n%s" % (repo_name, content),
             max_tokens=2000,
+            stage_name=stage_name,
         )
         soul["project_name"] = repo_name
+        if _debug_logger is not None:
+            ndec = len(soul.get("why_decisions", []))
+            ntraps = len(soul.get("unsaid_traps", []))
+            _debug_logger.detail("soul %s: %d why_decisions, %d traps" % (repo_name, ndec, ntraps))
         return soul
     except Exception as e:
         _log("Soul extraction failed for %s: %s" % (repo_name, e))
+        if _debug_logger is not None:
+            _debug_logger.detail("soul extraction FAILED %s: %s" % (repo_name, e))
         return None
 
 
 def synthesize(souls, intent):
     """Cross-repo synthesis via LLM API."""
     try:
-        return call_llm_json(
+        result = call_llm_json(
             SYNTHESIS_SYSTEM,
             "User intent: %s\n\nProject souls:\n%s"
             % (intent, json.dumps(souls, ensure_ascii=False, indent=2)),
             max_tokens=3000,
+            stage_name="synthesis",
         )
+        if _debug_logger is not None:
+            nconsensus = len(result.get("consensus_whys", []))
+            ndiverge = len(result.get("divergent_whys", []))
+            ntraps = len(result.get("combined_traps", []))
+            _debug_logger.detail("synthesis: %d consensus, %d divergent, %d traps" % (
+                nconsensus, ndiverge, ntraps))
+        return result
     except Exception as e:
         _log("Synthesis failed: %s" % e)
+        if _debug_logger is not None:
+            _debug_logger.detail("synthesis FAILED: %s" % e)
         return None
 
 
@@ -598,7 +817,7 @@ def compile_skill(synthesis, souls, profile):
 
     lines.append("---")
     lines.append(
-        "*Generated by Doramagic v9.0 — 不教用户做事，给他工具。*"
+        "*Generated by Doramagic v10.0 — 不教用户做事，给他工具。*"
     )
     return "\n".join(lines)
 
@@ -607,9 +826,15 @@ def compile_skill(synthesis, souls, profile):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Doramagic Single-Shot v9.0")
+    parser = argparse.ArgumentParser(description="Doramagic Single-Shot v10.0")
     parser.add_argument("--input", required=True, help="User input text")
     parser.add_argument("--run-dir", required=True, help="Base run directory")
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        default=False,
+        help="Enable debug logging: writes debug.log and LLM traces to run directory",
+    )
     args = parser.parse_args()
 
     run_dir = Path(os.path.expanduser(args.run_dir))
@@ -617,28 +842,59 @@ def main():
     rd = run_dir / run_id
     rd.mkdir(parents=True, exist_ok=True)
 
+    # Initialize debug logger if requested
+    global _debug_logger
+    if args.debug:
+        _debug_logger = DebugLogger(run_dir, run_id)
+
     _log("Starting run %s" % run_id)
+    if _debug_logger is not None:
+        _debug_logger.detail("run_dir=%s" % rd)
+        _debug_logger.detail("input=%r" % args.input)
 
     # ── Step 1: Build profile ──
+    if _debug_logger is not None:
+        _debug_logger.stage("Step 1: build_need_profile")
+
+    t0 = time.time()
     profile = build_need_profile(args.input)
     with open(rd / "need_profile.json", "w") as f:
         json.dump(profile, f, ensure_ascii=False, indent=2)
     _log("Profile: keywords=%s" % profile["keywords"])
 
+    if _debug_logger is not None:
+        _debug_logger.timing("build_need_profile", (time.time() - t0) * 1000)
+        _debug_logger.detail("profile saved to need_profile.json")
+
     # ── Step 2: Search all sources ──
 
     # 2a: ClawHub skill registry
+    if _debug_logger is not None:
+        _debug_logger.stage("Step 2a: search_clawhub")
+
+    t0 = time.time()
     clawhub_skills = search_clawhub(profile["keywords"])
     with open(rd / "clawhub_results.json", "w") as f:
         json.dump(clawhub_skills, f, ensure_ascii=False, indent=2)
+    if _debug_logger is not None:
+        _debug_logger.timing("search_clawhub", (time.time() - t0) * 1000)
 
     # 2b: Local OpenClaw skills
+    if _debug_logger is not None:
+        _debug_logger.stage("Step 2b: scan_local_skills")
+
+    t0 = time.time()
     local_skills = scan_local_skills(profile["keywords"])
     with open(rd / "local_skills.json", "w") as f:
         json.dump(local_skills, f, ensure_ascii=False, indent=2)
+    if _debug_logger is not None:
+        _debug_logger.timing("scan_local_skills", (time.time() - t0) * 1000)
 
     # 2c: GitHub repos via engine
     # Use github_queries from LLM if available (better than raw keywords)
+    if _debug_logger is not None:
+        _debug_logger.stage("Step 2c: engine subprocess")
+
     engine = SCRIPT_DIR / "doramagic_engine.py"
     _log("Running engine...")
 
@@ -657,6 +913,8 @@ def main():
                     seen.add(wl)
         engine_profile["keywords"] = gq_keywords[:6]
         _log("Engine keywords (from github_queries): %s" % engine_profile["keywords"])
+        if _debug_logger is not None:
+            _debug_logger.detail("engine keywords: %s" % engine_profile["keywords"])
 
     engine_need_path = rd / "need_profile_engine.json"
     with open(engine_need_path, "w") as f:
@@ -664,6 +922,7 @@ def main():
 
     repos = []
     engine_out = {}
+    t0 = time.time()
     try:
         result = subprocess.run(
             [
@@ -680,17 +939,51 @@ def main():
             text=True,
             timeout=360,
         )
+
+        # Save engine stdout and stderr in debug mode
+        if _debug_logger is not None:
+            engine_stdout_path = rd / "engine_stdout.txt"
+            engine_stderr_path = rd / "engine_stderr.txt"
+            engine_stdout_path.write_text(result.stdout, encoding="utf-8")
+            engine_stderr_path.write_text(result.stderr, encoding="utf-8")
+            _debug_logger.detail("engine returncode=%d" % result.returncode)
+            _debug_logger.detail("engine stdout (%d bytes) → %s" % (
+                len(result.stdout), engine_stdout_path))
+            _debug_logger.detail("engine stderr (%d bytes) → %s" % (
+                len(result.stderr), engine_stderr_path))
+            if result.stdout.strip():
+                _debug_logger.detail("engine stdout preview: %s" % result.stdout[:300])
+            if result.stderr.strip():
+                _debug_logger.detail("engine stderr preview: %s" % result.stderr[:300])
+
         if result.returncode == 0 and result.stdout.strip():
             engine_out = json.loads(result.stdout)
             repos = engine_out.get("repos", engine_out.get("repos_analyzed", []))
+            if _debug_logger is not None:
+                _debug_logger.detail("engine found %d repos" % len(repos))
+                for r in repos:
+                    _debug_logger.detail("  repo: %s" % r.get("name", "?"))
         else:
             _log("Engine returned no repos: %s" % result.stderr[-200:])
+            if _debug_logger is not None:
+                _debug_logger.detail("engine returned no repos — stderr tail: %s" % result.stderr[-200:])
     except subprocess.TimeoutExpired:
         _log("Engine timed out, continuing with other sources")
+        if _debug_logger is not None:
+            _debug_logger.detail("engine TIMED OUT after 360s")
     except Exception as e:
         _log("Engine error: %s, continuing with other sources" % e)
+        if _debug_logger is not None:
+            _debug_logger.detail("engine ERROR: %s" % e)
+
+    if _debug_logger is not None:
+        _debug_logger.timing("engine subprocess", (time.time() - t0) * 1000)
 
     # ── Step 2.5: Relevance gate ──
+    if _debug_logger is not None:
+        _debug_logger.stage("Step 2.5: relevance gate")
+
+    t0 = time.time()
     rejected_repos = []
     if repos:
         _log("Running relevance gate on %d repos..." % len(repos))
@@ -702,6 +995,9 @@ def main():
                     f, ensure_ascii=False, indent=2,
                 )
 
+    if _debug_logger is not None:
+        _debug_logger.timing("relevance_gate", (time.time() - t0) * 1000)
+
     total_sources = len(repos) + len(clawhub_skills) + len(local_skills)
     _log("Sources after relevance gate: %d repos, %d ClawHub skills, %d local skills" % (
         len(repos), len(clawhub_skills), len(local_skills)
@@ -709,6 +1005,9 @@ def main():
 
     if total_sources == 0:
         # Honest report: nothing relevant found
+        if _debug_logger is not None:
+            _debug_logger.detail("EARLY EXIT: no sources found after relevance gate")
+            _debug_logger.summary()
         rejected_names = [r.get("name", "?") for r in rejected_repos]
         if rejected_repos:
             msg = (
@@ -723,6 +1022,10 @@ def main():
         _output({"message": msg, "error": True})
 
     # ── Step 3: Soul extraction ──
+    if _debug_logger is not None:
+        _debug_logger.stage("Step 3: soul extraction")
+
+    t0 = time.time()
     souls = []
     for repo in repos:
         name = repo.get("name", "unknown")
@@ -760,7 +1063,16 @@ def main():
             "source": "local",
         })
 
+    if _debug_logger is not None:
+        _debug_logger.timing("soul_extraction_total", (time.time() - t0) * 1000)
+        _debug_logger.detail("souls built: %d total (repos=%d clawhub=%d local=%d)" % (
+            len(souls), len(souls) - len(clawhub_skills) - len(local_skills),
+            len(clawhub_skills), len(local_skills)))
+
     if not souls:
+        if _debug_logger is not None:
+            _debug_logger.detail("EARLY EXIT: all sources yielded no souls")
+            _debug_logger.summary()
         _output(
             {
                 "message": "所有信息源都无法提取有效内容。找到了 %d 个项目但无法分析。" % total_sources,
@@ -774,6 +1086,10 @@ def main():
     ))
 
     # ── Step 4: Community signals ──
+    if _debug_logger is not None:
+        _debug_logger.stage("Step 4: community signals")
+
+    t0 = time.time()
     all_signals = []
     for repo in repos:
         repo_url = repo.get("url", "")
@@ -798,9 +1114,16 @@ def main():
         with open(rd / "community_signals.json", "w") as f:
             json.dump(all_signals, f, ensure_ascii=False, indent=2)
     _log("Community signals: %d collected" % len(all_signals))
+    if _debug_logger is not None:
+        _debug_logger.timing("community_signals_total", (time.time() - t0) * 1000)
+        _debug_logger.detail("community signals total: %d" % len(all_signals))
 
     # ── Step 5: Synthesis ──
+    if _debug_logger is not None:
+        _debug_logger.stage("Step 5: synthesis")
+
     _log("Synthesizing...")
+    t0 = time.time()
     syn = synthesize(souls, profile["intent"])
 
     if not syn:
@@ -827,12 +1150,21 @@ def main():
                 "workflow_steps": [],
             },
         }
+        if _debug_logger is not None:
+            _debug_logger.detail("synthesis FAILED — using best-soul fallback: %s" % best["project_name"])
+
+    if _debug_logger is not None:
+        _debug_logger.timing("synthesis", (time.time() - t0) * 1000)
 
     with open(rd / "staging" / "synthesis.json", "w") as f:
         json.dump(syn, f, ensure_ascii=False, indent=2)
 
     # ── Step 6: Compile ──
+    if _debug_logger is not None:
+        _debug_logger.stage("Step 6: compile")
+
     _log("Compiling skill...")
+    t0 = time.time()
     skill_md = compile_skill(syn, souls, profile)
 
     delivery = rd / "delivery"
@@ -840,7 +1172,15 @@ def main():
     with open(delivery / "SKILL.md", "w") as f:
         f.write(skill_md)
 
+    if _debug_logger is not None:
+        _debug_logger.timing("compile_skill", (time.time() - t0) * 1000)
+        _debug_logger.detail("SKILL.md compiled: %d bytes, %d lines" % (
+            len(skill_md), skill_md.count("\n")))
+
     # ── Step 7: Output ──
+    if _debug_logger is not None:
+        _debug_logger.stage("Step 7: output")
+
     _log("Done!")
 
     contract = syn.get("skill_contract", {})
@@ -892,6 +1232,10 @@ def main():
 
     msg.append("\n完整 Skill 已保存: `%s/SKILL.md`" % delivery)
     msg.append("\n这是一个**道具**（Skill），可以注入你的 AI 助手，让它在相关领域变得更聪明。")
+
+    if _debug_logger is not None:
+        _debug_logger.detail("output JSON ready, message length=%d chars" % len("\n".join(msg)))
+        _debug_logger.summary()
 
     _output(
         {
