@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
-"""Doramagic Single-Shot v10.1 — fast path + Socratic gate + intent recognition.
+"""Doramagic Single-Shot v11.0 — brick-enriched + fast path + Socratic gate.
+
+v11.0 changes:
+  - Domain brick integration: 278 bricks (34 domains) injected into SKILL.md and extraction prompts
+  - Fast path synthesis: ClawHub-only path uses Python compilation (no LLM), 52s → 18s
+  - Timing fix: debug summary no longer double-counts (was 103s, actually 52s)
+  - Version bump for coordinated engine rewrite (github_search.py + doramagic_engine.py)
 
 v10.1 changes:
-  - Intent recognition: LLM now returns confidence, user_type, and clarifying questions
-  - Socratic gate: if confidence < 0.7, returns questions instead of blindly searching
-  - Fast path: ClawHub/Local searched first; if high-relevance results found, GitHub skipped
-  - GitHub engine timeout: 360s → 60s (no longer blocks entire experience)
-  - Result: most queries complete in 15-25s instead of 5+ minutes
+  - Intent recognition with confidence, user_type, clarifying questions
+  - Socratic gate: confidence < 0.7 returns questions instead of blind search
+  - Fast path: ClawHub/Local first, GitHub skipped when high-relevance results found
+  - GitHub engine timeout: 360s → 60s
 
 v10.0 changes:
   - Added --debug flag with DebugLogger for full execution tracing
@@ -48,6 +53,121 @@ LLM_MODEL = "glm-5"
 # Module-level debug logger (set in main() if --debug is passed)
 _debug_logger = None
 
+# ── Brick Loading ──
+
+# Domain keyword → brick file mapping (fuzzy match)
+_DOMAIN_BRICK_MAP = {
+    "health": "domain_health",
+    "medical": "domain_health",
+    "fitness": "domain_health",
+    "wellness": "domain_health",
+    "finance": "domain_finance",
+    "accounting": "domain_finance",
+    "budget": "domain_finance",
+    "expense": "domain_finance",
+    "investment": "domain_finance",
+    "note": "domain_pkm",
+    "knowledge": "domain_pkm",
+    "pkm": "domain_pkm",
+    "wiki": "domain_pkm",
+    "journal": "domain_pkm",
+    "obsidian": "domain_pkm",
+    "cloud": "domain_private_cloud",
+    "server": "domain_private_cloud",
+    "selfhost": "domain_private_cloud",
+    "self-host": "domain_private_cloud",
+    "nas": "domain_private_cloud",
+    "homelab": "domain_private_cloud",
+    "rss": "domain_info_ingestion",
+    "feed": "domain_info_ingestion",
+    "scraping": "domain_info_ingestion",
+    "crawler": "domain_info_ingestion",
+    "ingestion": "domain_info_ingestion",
+    "news": "domain_info_ingestion",
+    "home assistant": "home_assistant",
+    "smart home": "home_assistant",
+    "iot": "home_assistant",
+    "automation": "home_assistant",
+}
+
+# Framework keyword → brick file mapping
+_FRAMEWORK_BRICK_MAP = {
+    "django": "django",
+    "react": "react",
+    "vue": "vuejs",
+    "next": "nextjs",
+    "nextjs": "nextjs",
+    "flask": "fastapi_flask",
+    "fastapi": "fastapi_flask",
+    "spring": "java_spring_boot",
+    "rails": "ruby_rails",
+    "rust": "rust",
+    "swift": "swift_ios",
+    "kotlin": "kotlin_android",
+    "langchain": "langchain",
+    "llamaindex": "llamaindex",
+    "typescript": "typescript_nodejs",
+    "node": "typescript_nodejs",
+    "python": "python_general",
+    "go": "go_general",
+    "golang": "go_general",
+    "php": "php_laravel",
+    "laravel": "php_laravel",
+}
+
+
+def load_matching_bricks(domain, keywords=None, bricks_dir=None):
+    """Load bricks matching the domain and/or detected frameworks.
+
+    Returns list of brick dicts with statement, knowledge_type, confidence, tags.
+    """
+    if bricks_dir is None:
+        # Auto-resolve: check SCRIPT_DIR/../bricks/ or DORAMAGIC_ROOT/bricks/
+        candidates = [
+            SCRIPT_DIR.parent / "bricks",
+            SCRIPT_DIR.parent.parent / "bricks",
+            Path(os.environ.get("DORAMAGIC_ROOT", "")) / "bricks",
+        ]
+        for c in candidates:
+            if c.exists():
+                bricks_dir = c
+                break
+    if bricks_dir is None:
+        return []
+
+    bricks_dir = Path(bricks_dir)
+    matched_files = set()
+
+    # Match by domain
+    domain_lower = (domain or "").lower()
+    for keyword, brick_file in _DOMAIN_BRICK_MAP.items():
+        if keyword in domain_lower:
+            matched_files.add(brick_file)
+
+    # Match by keywords (framework detection)
+    for kw in (keywords or []):
+        kw_lower = kw.lower()
+        if kw_lower in _FRAMEWORK_BRICK_MAP:
+            matched_files.add(_FRAMEWORK_BRICK_MAP[kw_lower])
+
+    # Load bricks from matched files
+    all_bricks = []
+    for brick_file in matched_files:
+        jsonl_path = bricks_dir / ("%s.jsonl" % brick_file)
+        if not jsonl_path.exists():
+            continue
+        try:
+            with open(jsonl_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        brick = json.loads(line)
+                        all_bricks.append(brick)
+        except Exception:
+            pass
+
+    return all_bricks
+
 
 def _get_api_key():
     """Read API key from openclaw.json (bailian provider)."""
@@ -86,7 +206,7 @@ class DebugLogger:
         self._current_stage: str = ""
         self._stage_start: float = 0.0
         self._write("=" * 72)
-        self._write("Doramagic Single-Shot v10.1 — Debug Log")
+        self._write("Doramagic Single-Shot v11.0 — Debug Log")
         self._write("Run ID: %s" % run_id)
         self._write("Started: %s" % datetime.now().isoformat())
         self._write("=" * 72)
@@ -174,7 +294,11 @@ class DebugLogger:
         self._write("  [TIMING] %s: %.0f ms" % (stage, elapsed_ms))
 
     def summary(self):
-        """Print a table of all stages with timing at the end."""
+        """Print a table of all stages with timing at the end.
+
+        Deduplicates: stage() auto-records outer timing, timing() records sub-step.
+        Only show stage-level entries (those starting with "Step") to avoid double-counting.
+        """
         # Record final stage timing
         if self._current_stage:
             elapsed = (time.time() - self._stage_start) * 1000
@@ -188,8 +312,13 @@ class DebugLogger:
         self._write("=" * 72)
         total = 0.0
         for entry in self._stage_timings:
-            self._write("  %-40s %8.0f ms" % (entry["stage"], entry["elapsed_ms"]))
-            total += entry["elapsed_ms"]
+            stage_name = entry["stage"]
+            # Only count stage-level entries (set by stage() call) for the total
+            # Sub-step timings (set by timing() call) are logged but not summed
+            is_stage_level = stage_name.startswith("Step ")
+            if is_stage_level:
+                self._write("  %-40s %8.0f ms" % (stage_name, entry["elapsed_ms"]))
+                total += entry["elapsed_ms"]
         self._write("-" * 72)
         self._write("  %-40s %8.0f ms" % ("TOTAL", total))
         self._write("=" * 72)
@@ -693,8 +822,11 @@ def read_repo_files(repo_dir, focus_files=None, max_chars=30000):
     return "\n\n".join(parts)
 
 
-def extract_soul(repo_name, repo_dir, facts):
-    """Extract soul from one repo via LLM API."""
+def extract_soul(repo_name, repo_dir, facts, bricks=None):
+    """Extract soul from one repo via LLM API.
+
+    bricks: optional list of domain bricks to inject as context.
+    """
     focus = facts.get("focus_files", [])
     content = read_repo_files(repo_dir, focus)
     if not content:
@@ -703,10 +835,21 @@ def extract_soul(repo_name, repo_dir, facts):
             _debug_logger.detail("soul extraction SKIP %s — no readable files" % repo_name)
         return None
 
+    # Build system prompt, optionally enriched with domain bricks
+    system_prompt = SOUL_SYSTEM
+    if bricks:
+        brick_lines = ["\n\nYou already know these baseline facts about this domain:"]
+        for b in bricks[:5]:  # Cap at 5 to avoid prompt bloat
+            stmt = b.get("statement", "")[:200]
+            if stmt:
+                brick_lines.append("- %s" % stmt)
+        brick_lines.append("\nUse this knowledge to ask deeper questions and extract non-obvious insights.")
+        system_prompt = SOUL_SYSTEM + "\n".join(brick_lines)
+
     stage_name = "soul_extraction_%s" % re.sub(r"[^a-zA-Z0-9_-]", "_", repo_name)[:40]
     try:
         soul = call_llm_json(
-            SOUL_SYSTEM,
+            system_prompt,
             "Project: %s\n\n%s" % (repo_name, content),
             max_tokens=2000,
             stage_name=stage_name,
@@ -748,14 +891,69 @@ def synthesize(souls, intent):
         return None
 
 
+# ── Fast Path Synthesis (Python-only, no LLM) ──
+
+
+def _synthesize_fast(souls, profile):
+    """Synthesize from ClawHub/Local souls without LLM call.
+
+    When fast path skips GitHub, ClawHub skills already have structured
+    descriptions. We compile directly instead of asking LLM to synthesize.
+    """
+    # Collect design philosophies as consensus
+    consensus = []
+    seen_statements = set()
+    for soul in souls:
+        phil = soul.get("design_philosophy", "").strip()
+        if phil and phil not in seen_statements:
+            consensus.append({
+                "statement": phil,
+                "sources": [soul["project_name"]],
+            })
+            seen_statements.add(phil)
+
+    # Collect traps
+    traps = []
+    for soul in souls:
+        for trap in soul.get("unsaid_traps", []):
+            trap_text = trap.get("trap", "")
+            if trap_text:
+                traps.append({
+                    "trap": trap_text,
+                    "severity": trap.get("severity", "medium"),
+                    "source": soul["project_name"],
+                })
+
+    # Collect capabilities from why_decisions
+    capabilities = []
+    for soul in souls:
+        for d in soul.get("why_decisions", []):
+            decision = d.get("decision", "")
+            if decision:
+                capabilities.append(decision)
+
+    return {
+        "consensus_whys": consensus[:5],
+        "divergent_whys": [],
+        "combined_traps": traps[:7],
+        "recommendation": "",
+        "skill_contract": {
+            "purpose": profile.get("intent", ""),
+            "capabilities": capabilities[:5],
+            "workflow_steps": [],
+        },
+    }
+
+
 # ── Compilation ──
 
 
-def compile_skill(synthesis, souls, profile):
+def compile_skill(synthesis, souls, profile, bricks=None):
     """Compile into an actionable SKILL.md — an AI agent instruction set, not a report.
 
     Doramagic 产品之魂：不教用户做事，给他工具。
     SKILL.md 是注入 AI 助手的指令集，让助手在特定领域变聪明。
+    bricks: optional list of domain brick dicts to inject as baseline knowledge.
     """
     contract = synthesis.get("skill_contract", {})
     purpose = contract.get("purpose", profile.get("intent", ""))
@@ -797,6 +995,20 @@ def compile_skill(synthesis, souls, profile):
         for w in consensus:
             src = ", ".join(w.get("sources", []))
             lines.append("- **%s** — learned from: %s" % (w["statement"], src))
+        lines.append("")
+
+    # ── Section 2b: Domain Baseline Knowledge (from bricks) ──
+    if bricks:
+        lines.append("## Domain Baseline Knowledge\n")
+        lines.append("These are verified facts about this domain, independent of any specific project.\n")
+        for brick in bricks[:10]:  # Cap at 10 bricks to avoid bloat
+            stmt = brick.get("statement", "")
+            ktype = brick.get("knowledge_type", "")
+            if stmt:
+                label = {"failure": "RISK", "constraint": "CONSTRAINT", "capability": "CAPABILITY"}.get(
+                    ktype, "FACT"
+                )
+                lines.append("- **[%s]** %s" % (label, stmt[:300]))
         lines.append("")
 
     # ── Section 3: Decision Framework (when approaches conflict) ──
@@ -853,7 +1065,7 @@ def compile_skill(synthesis, souls, profile):
 
     lines.append("---")
     lines.append(
-        "*Generated by Doramagic v10.0 — 不教用户做事，给他工具。*"
+        "*Generated by Doramagic v11.0 — 不教用户做事，给他工具。*"
     )
     return "\n".join(lines)
 
@@ -862,7 +1074,7 @@ def compile_skill(synthesis, souls, profile):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Doramagic Single-Shot v10.1")
+    parser = argparse.ArgumentParser(description="Doramagic Single-Shot v11.0")
     parser.add_argument("--input", required=True, help="User input text")
     parser.add_argument("--run-dir", required=True, help="Base run directory")
     parser.add_argument(
@@ -1100,6 +1312,14 @@ def main():
     if _debug_logger is not None:
         _debug_logger.stage("Step 3: soul extraction")
 
+    # Pre-load domain bricks for extraction enrichment
+    extraction_bricks = load_matching_bricks(
+        profile.get("domain", ""),
+        profile.get("keywords", []),
+    )
+    if extraction_bricks and _debug_logger is not None:
+        _debug_logger.detail("extraction bricks: %d loaded for soul extraction prompts" % len(extraction_bricks))
+
     t0 = time.time()
     souls = []
     for repo in repos:
@@ -1108,7 +1328,7 @@ def main():
         facts = repo.get("facts", {})
 
         _log("Extracting soul: %s" % name)
-        soul = extract_soul(name, local_dir, facts)
+        soul = extract_soul(name, local_dir, facts, bricks=extraction_bricks)
         if soul:
             souls.append(soul)
             staging = rd / "staging" / name.replace("/", "-")
@@ -1197,9 +1417,17 @@ def main():
     if _debug_logger is not None:
         _debug_logger.stage("Step 5: synthesis")
 
-    _log("Synthesizing...")
     t0 = time.time()
-    syn = synthesize(souls, profile["intent"])
+
+    # Fast path: if no GitHub repos, skip LLM synthesis — compile directly from souls
+    if skip_github and not repos:
+        _log("Fast path synthesis: Python-only (no LLM)")
+        syn = _synthesize_fast(souls, profile)
+        if _debug_logger is not None:
+            _debug_logger.detail("FAST PATH synthesis — no LLM, Python-only from %d souls" % len(souls))
+    else:
+        _log("Synthesizing via LLM...")
+        syn = synthesize(souls, profile["intent"])
 
     if not syn:
         # Fallback: use best soul
@@ -1235,13 +1463,26 @@ def main():
     with open(rd / "staging" / "synthesis.json", "w") as f:
         json.dump(syn, f, ensure_ascii=False, indent=2)
 
+    # ── Step 5.5: Load domain bricks ──
+    domain_bricks = load_matching_bricks(
+        profile.get("domain", ""),
+        profile.get("keywords", []),
+    )
+    if domain_bricks:
+        _log("Loaded %d domain bricks" % len(domain_bricks))
+        if _debug_logger is not None:
+            _debug_logger.detail("domain bricks loaded: %d from domain=%s" % (
+                len(domain_bricks), profile.get("domain", "")))
+    elif _debug_logger is not None:
+        _debug_logger.detail("no matching domain bricks found")
+
     # ── Step 6: Compile ──
     if _debug_logger is not None:
         _debug_logger.stage("Step 6: compile")
 
     _log("Compiling skill...")
     t0 = time.time()
-    skill_md = compile_skill(syn, souls, profile)
+    skill_md = compile_skill(syn, souls, profile, bricks=domain_bricks)
 
     delivery = rd / "delivery"
     delivery.mkdir(parents=True, exist_ok=True)
