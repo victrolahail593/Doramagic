@@ -54,7 +54,10 @@ class SearchDirection(BaseModel):
 
 
 class NeedProfile(BaseModel):
-    """用户需求结构化表示 — Phase A 输出，驱动整个管线。"""
+    """用户需求结构化表示 — Phase A 输出，驱动整个管线。
+
+    v1.1: 新增 LLM 生成的搜索优化字段（Optional，向后兼容）。
+    """
 
     schema_version: str = "dm.need-profile.v1"
     raw_input: str
@@ -63,6 +66,11 @@ class NeedProfile(BaseModel):
     search_directions: list[SearchDirection]
     constraints: list[str]
     quality_expectations: dict[str, str] = {}
+    # v1.1: LLM-generated search optimization
+    domain: str = "general"
+    intent_en: Optional[str] = None
+    github_queries: list[str] = []
+    relevance_terms: list[str] = []
 
 
 class CandidateQualitySignals(BaseModel):

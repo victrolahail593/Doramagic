@@ -1,7 +1,8 @@
-"""Phase B executor: Real GitHub search + candidate ranking.
+"""Phase B executor: Real GitHub search + candidate ranking + relevance gate.
 
-Replaces the mock run_discovery() with actual GitHub API calls via github_search.py.
-Also searches ClawHub and scans local OpenClaw skills.
+v9.0: Uses github_queries from NeedProfile when available (LLM-generated).
+      Adds relevance gate: filters out repos that don't match relevance_terms.
+      Honest reporting when no relevant projects found.
 """
 
 from __future__ import annotations
@@ -47,7 +48,21 @@ class DiscoveryRunner:
             return self._error("Expected DiscoveryInput", ErrorCodes.INPUT_INVALID, start)
 
         need = input.need_profile
-        keywords = need.keywords[:3]  # GitHub search: top 3 keywords
+
+        # v9.0: Prefer github_queries from LLM over raw keywords
+        if need.github_queries:
+            # Use first github_query's words for search
+            search_keywords = []
+            seen = set()
+            for q in need.github_queries:
+                for word in q.split():
+                    wl = word.lower()
+                    if wl not in seen and len(wl) >= 2:
+                        search_keywords.append(word)
+                        seen.add(wl)
+            keywords = search_keywords[:5]
+        else:
+            keywords = need.keywords[:3]
 
         if not keywords:
             return self._error("No keywords for search", ErrorCodes.INPUT_INVALID, start)
@@ -61,15 +76,31 @@ class DiscoveryRunner:
         # 3. Local skills scan (optional)
         local_candidates = self._scan_local_skills(keywords)
 
-        # Merge and rank
+        # Merge all candidates
         all_candidates = github_candidates + clawhub_candidates + local_candidates
+
+        # v9.0: Relevance gate — filter out irrelevant GitHub candidates
+        if need.relevance_terms and github_candidates:
+            github_candidates = self._relevance_gate(github_candidates, need.relevance_terms)
+            if len(github_candidates) < len(all_candidates):
+                rejected_count = len(all_candidates) - len(github_candidates) - len(clawhub_candidates) - len(local_candidates)
+                if rejected_count > 0:
+                    warnings.append(WarningItem(
+                        code="W_IRRELEVANT_FILTERED",
+                        message=f"Filtered {rejected_count} irrelevant GitHub repo(s)",
+                    ))
+            all_candidates = github_candidates + clawhub_candidates + local_candidates
 
         if not all_candidates:
             return ModuleResultEnvelope(
                 module_name="DiscoveryRunner",
                 status="blocked",
                 error_code=ErrorCodes.NO_CANDIDATES,
-                warnings=[WarningItem(code="NO_RESULTS", message="No candidates found for: " + " ".join(keywords))],
+                warnings=[WarningItem(
+                    code="NO_RESULTS",
+                    message="No relevant candidates found for: " + " ".join(keywords)
+                    + ". Relevance filter active with terms: " + ", ".join(need.relevance_terms or []),
+                )],
                 data=DiscoveryResult(candidates=[], search_coverage=[
                     SearchCoverageItem(direction=kw, status="missing") for kw in keywords
                 ]),
@@ -102,6 +133,23 @@ class DiscoveryRunner:
             data=result,
             metrics=self._metrics(start),
         )
+
+    def _relevance_gate(
+        self, candidates: list[DiscoveryCandidate], relevance_terms: list[str],
+    ) -> list[DiscoveryCandidate]:
+        """Filter candidates by relevance to user intent.
+
+        A candidate is relevant if its name or contribution (description) mentions
+        at least 1 relevance term. This prevents extracting knowledge from
+        completely unrelated projects (e.g., VPN scripts for "WiFi密码管理").
+        """
+        terms_lower = [t.lower() for t in relevance_terms]
+        relevant = []
+        for c in candidates:
+            searchable = f"{c.name} {c.contribution}".lower()
+            if any(t in searchable for t in terms_lower):
+                relevant.append(c)
+        return relevant
 
     def _search_github(self, keywords: list[str]) -> list[DiscoveryCandidate]:
         """Real GitHub API search via doramagic_community.github_search."""
