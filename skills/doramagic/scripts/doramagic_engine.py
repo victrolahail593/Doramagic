@@ -47,7 +47,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 GITHUB_SEARCH_SCRIPT = SCRIPT_DIR / "github_search.py"
 EXTRACT_FACTS_SCRIPT = SCRIPT_DIR / "extract_facts.py"
 
-MIN_STARS = 30          # repos with fewer stars are discarded
+MIN_STARS = 0          # repos with fewer stars are discarded
 DEFAULT_TOP = 5         # how many repos to analyse when --top is not given
 HARD_TIMEOUT_SECS = 300 # 5-minute wall-clock cap
 RETRY_DELAY_SECS = 10   # pause before retrying a 403/429 from GitHub

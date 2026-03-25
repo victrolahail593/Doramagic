@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
-"""Doramagic Single-Shot v8.1 — Python does everything, LLM only displays.
+"""Doramagic Single-Shot v9.0 — LLM-powered discovery + actionable skill output.
 
-核心改变：不再多轮中转，Python 全程干完，OpenClaw LLM 只展示最终结果。
+v9.0 changes:
+  - build_need_profile() uses LLM to generate GitHub search keywords (fixes "WiFi密码管理" bug)
+  - Relevance gate after discovery: irrelevant repos are filtered, honest "not found" report
+  - compile_skill() outputs AI agent instruction set, not research report
 
 流程：
-  1. 解析用户输入 → 构建 need_profile（无需追问）
+  1. 解析用户输入 → LLM 生成搜索关键词 + 相关性判定词（fallback: 静态字典）
   2. 搜索三个信息源：GitHub repos + ClawHub skills + 本地 OpenClaw skills
-  3. 下载 repos + 事实提取
+  3. 相关性门控：过滤不相关结果，搜不到就诚实报告
   4. 对每个 repo 直接调 LLM API 做灵魂提取
   5. 收集社区信号（GitHub issues/PRs）
   6. 跨 repo 综合（含社区信号）
-  7. Python 编译最终 Skill
+  7. Python 编译最终 Skill（可用道具，不是设计文档）
   8. 输出 JSON（message 字段给用户看）
 
 用法（被 SKILL.md 调用）：
@@ -93,61 +96,136 @@ def call_llm_json(system_prompt, user_prompt, max_tokens=4096):
 
 # ── Input Parsing ──
 
-CN_TO_EN = {
-    "记账": "expense tracker accounting",
-    "学习": "learning education",
-    "购物": "shopping ecommerce",
-    "旅居": "digital nomad living abroad",
-    "助手": "assistant tool helper",
-    "工具": "tool utility",
-    "翻译": "translation language",
-    "健康": "health fitness tracker",
-    "食谱": "recipe manager cooking",
-    "家居": "smart home automation",
-    "笔记": "note taking knowledge",
-    "日程": "calendar schedule planner",
-    "清迈": "chiang mai",
-    "泰国": "thailand travel",
-    "生活": "lifestyle daily planner",
-    "交通": "transportation commute",
-    "医疗": "healthcare medical",
-    "社交": "social community",
-    "AI": "AI artificial intelligence",
-    "数据": "data analytics",
-    "管理": "management organizer",
-    "自动": "automation workflow",
-    "个人": "personal productivity",
+NEED_PROFILE_SYSTEM = """You generate GitHub search queries from user requests. The user wants to find open-source projects to learn from.
+
+Output valid JSON only, no other text. Schema:
+{
+  "domain": "software domain in English (e.g., 'password management', 'fitness tracking')",
+  "intent_en": "what the user wants, translated to English (1 sentence)",
+  "github_queries": ["query1", "query2", "query3"],
+  "relevance_terms": ["term1", "term2", "term3", "term4", "term5"]
+}
+
+Rules:
+- github_queries: 3 different search strings (2-4 words each) optimized for GitHub search API.
+  Think about what developers actually NAME their repos and write in descriptions.
+  Example: for "WiFi密码管理" → ["wifi password manager", "network credential manager", "wifi qr code share"]
+  Example: for "记账app" → ["expense tracker", "personal finance manager", "budget tracking app"]
+- relevance_terms: 5 English keywords that a RELEVANT repo would mention in its README or description.
+  These are used to filter out irrelevant search results.
+  Example: for "WiFi密码管理" → ["wifi", "password", "credential", "network", "ssid"]
+- domain: the software domain, NOT a generic label. Be specific.
+- intent_en: precise translation of the user's goal."""
+
+# Fallback: static CN→EN mapping (used when LLM is unavailable)
+_CN_TO_EN_FALLBACK = {
+    "记账": ["expense tracker", "personal finance", "bookkeeping"],
+    "学习": ["learning platform", "education app", "study tool"],
+    "购物": ["shopping app", "e-commerce", "price comparison"],
+    "翻译": ["translation tool", "translator", "i18n"],
+    "健康": ["health tracker", "fitness app", "wellness"],
+    "食谱": ["recipe manager", "cookbook app", "meal planner"],
+    "家居": ["smart home", "home automation", "IoT"],
+    "笔记": ["note taking", "knowledge base", "markdown editor"],
+    "日程": ["calendar app", "schedule planner", "task manager"],
+    "密码": ["password manager", "credential manager", "security vault"],
+    "天气": ["weather app", "forecast", "weather API"],
+    "音乐": ["music player", "audio streaming", "playlist manager"],
+    "视频": ["video player", "streaming app", "media player"],
+    "社交": ["social network", "chat app", "messaging"],
+    "地图": ["map navigation", "location service", "GPS tracker"],
+    "备份": ["backup tool", "file sync", "cloud storage"],
+    "监控": ["monitoring tool", "alerting system", "observability"],
+    "自动化": ["automation workflow", "task automation", "pipeline"],
+    "AI": ["AI tool", "machine learning", "LLM application"],
+    "数据": ["data analytics", "data visualization", "dashboard"],
 }
 
 
 def build_need_profile(user_input):
-    """Build need profile from user input in a single pass."""
-    clean = re.sub(r"^/dora\s*", "", user_input).strip()
+    """Build need profile using LLM for keyword generation, with static fallback."""
+    clean = re.sub(r"^/?dora\s*", "", user_input).strip()
 
-    # Extract keywords via CN→EN mapping
+    if not clean:
+        return {
+            "keywords": [],
+            "domain": "general",
+            "intent": "",
+            "topic": "",
+            "relevance_terms": [],
+            "github_queries": [],
+            "mode": "new",
+        }
+
+    # Try LLM-powered keyword generation
+    try:
+        _log("Generating search keywords via LLM...")
+        profile_data = call_llm_json(NEED_PROFILE_SYSTEM, clean, max_tokens=500)
+
+        domain = profile_data.get("domain", "general")
+        intent_en = profile_data.get("intent_en", clean)
+        github_queries = profile_data.get("github_queries", [])
+        relevance_terms = profile_data.get("relevance_terms", [])
+
+        # Build keywords from github_queries (split multi-word queries into individual terms too)
+        keywords = []
+        seen = set()
+        for q in github_queries:
+            for word in q.split():
+                wl = word.lower()
+                if wl not in seen and len(wl) >= 2:
+                    keywords.append(word)
+                    seen.add(wl)
+
+        _log("LLM keywords: %s" % keywords[:8])
+        _log("LLM relevance_terms: %s" % relevance_terms)
+
+        return {
+            "keywords": keywords[:8],
+            "domain": domain,
+            "intent": clean,
+            "intent_en": intent_en,
+            "topic": clean[:50],
+            "relevance_terms": relevance_terms,
+            "github_queries": github_queries[:3],
+            "mode": "new",
+        }
+
+    except Exception as e:
+        _log("LLM keyword generation failed (%s), using fallback" % e)
+        return _build_need_profile_fallback(clean)
+
+
+def _build_need_profile_fallback(clean):
+    """Fallback: static CN→EN mapping when LLM is unavailable."""
     keywords = []
-    for cn, en in CN_TO_EN.items():
-        if cn in clean:
-            keywords.extend(en.split())
-
-    # Deduplicate
     seen = set()
-    unique = []
-    for kw in keywords:
-        low = kw.lower()
-        if low not in seen:
-            seen.add(low)
-            unique.append(kw)
 
-    # Ensure minimum keywords
-    if len(unique) < 3:
-        unique.extend(["open source", "tool", "assistant"])
+    for cn, en_list in _CN_TO_EN_FALLBACK.items():
+        if cn in clean:
+            for en in en_list:
+                if en.lower() not in seen:
+                    keywords.append(en)
+                    seen.add(en.lower())
+
+    # Extract English words from input
+    en_words = re.findall(r"[a-zA-Z]{3,}", clean)
+    for w in en_words:
+        wl = w.lower()
+        if wl not in seen:
+            keywords.append(w)
+            seen.add(wl)
+
+    if not keywords:
+        keywords = ["open source tool"]
 
     return {
-        "keywords": unique[:8],
+        "keywords": keywords[:8],
         "domain": "general",
         "intent": clean,
         "topic": clean[:50],
+        "relevance_terms": [],
+        "github_queries": [],
         "mode": "new",
     }
 
@@ -233,6 +311,46 @@ def scan_local_skills(keywords):
     return found[:5]
 
 
+# ── Relevance Gate ──
+
+
+def check_relevance(repos, profile):
+    """Filter repos by relevance to user intent. Returns (relevant, rejected).
+
+    Uses relevance_terms from the LLM-generated profile. A repo is relevant if
+    its name, description, or topics mention at least 1 relevance term.
+    If no relevance_terms available (fallback mode), passes all repos through.
+    """
+    relevance_terms = profile.get("relevance_terms", [])
+    if not relevance_terms:
+        _log("No relevance_terms available, skipping relevance gate")
+        return repos, []
+
+    terms_lower = [t.lower() for t in relevance_terms]
+    relevant = []
+    rejected = []
+
+    for repo in repos:
+        # Build searchable text from repo metadata
+        name = repo.get("name", "").lower()
+        desc = repo.get("description", "").lower() if repo.get("description") else ""
+        topics = " ".join(repo.get("topics", [])).lower() if repo.get("topics") else ""
+        searchable = f"{name} {desc} {topics}"
+
+        # Count how many relevance terms match
+        matches = sum(1 for t in terms_lower if t in searchable)
+
+        if matches >= 1:
+            relevant.append(repo)
+            _log("  ✓ %s (matched %d terms)" % (repo.get("name", "?"), matches))
+        else:
+            rejected.append(repo)
+            _log("  ✗ %s (0 matches, desc: %s)" % (repo.get("name", "?"), desc[:80]))
+
+    _log("Relevance gate: %d/%d repos passed" % (len(relevant), len(repos)))
+    return relevant, rejected
+
+
 # ── Community Signals ──
 
 
@@ -244,7 +362,7 @@ def collect_community_signals(repo_name, repo_url, repo_path=None):
         return None
 
     output_file = Path("/tmp/doramagic_signals_%s.json" % repo_name.replace("/", "-"))
-    cmd = ["python3", str(script), "--repo-url", repo_url, "--output", str(output_file)]
+    cmd = [sys.executable, str(script), "--repo-url", repo_url, "--output", str(output_file)]
     if repo_path:
         cmd.extend(["--repo-path", str(repo_path)])
 
@@ -379,14 +497,21 @@ def synthesize(souls, intent):
 
 
 def compile_skill(synthesis, souls, profile):
-    """Compile into final SKILL.md content."""
+    """Compile into an actionable SKILL.md — an AI agent instruction set, not a report.
+
+    Doramagic 产品之魂：不教用户做事，给他工具。
+    SKILL.md 是注入 AI 助手的指令集，让助手在特定领域变聪明。
+    """
     contract = synthesis.get("skill_contract", {})
     purpose = contract.get("purpose", profile.get("intent", ""))
     capabilities = contract.get("capabilities", [])
     workflow = contract.get("workflow_steps", [])
     consensus = synthesis.get("consensus_whys", [])
+    divergent = synthesis.get("divergent_whys", [])
     traps = synthesis.get("combined_traps", [])
     recommendation = synthesis.get("recommendation", "")
+    domain = profile.get("domain", "general")
+    intent_en = profile.get("intent_en", purpose)
 
     # Sanitize topic for skill name
     topic = profile.get("topic", "custom-skill")
@@ -396,58 +521,84 @@ def compile_skill(synthesis, souls, profile):
         "---",
         "name: %s" % skill_name,
         "description: |",
-        "  %s" % purpose,
+        "  %s" % (intent_en or purpose),
         "version: 1.0.0",
+        "domain: %s" % domain,
         "tags: [doramagic-generated]",
         "---\n",
-        "# %s\n" % topic,
-        "## Purpose\n%s\n" % purpose,
     ]
 
+    # ── Section 1: Role & Mission (the agent's identity) ──
+    lines.append("# %s\n" % topic)
+    lines.append("## Role\n")
+    lines.append("You are a domain expert in **%s**. " % domain)
+    lines.append("When the user asks about %s, " % topic)
+    lines.append("apply the knowledge below to give informed, practical advice.\n")
+
+    # ── Section 2: Domain Knowledge (the WHY — what makes you an expert) ──
+    if consensus:
+        lines.append("## Domain Knowledge — Design Principles\n")
+        lines.append("These principles are extracted from real-world open-source projects in this domain.\n")
+        for w in consensus:
+            src = ", ".join(w.get("sources", []))
+            lines.append("- **%s** — learned from: %s" % (w["statement"], src))
+        lines.append("")
+
+    # ── Section 3: Decision Framework (when approaches conflict) ──
+    if divergent:
+        lines.append("## Decision Framework — Trade-offs\n")
+        lines.append("When advising on architecture choices, consider these known trade-offs:\n")
+        for d in divergent:
+            lines.append("- **%s**" % d.get("statement", ""))
+            lines.append("  - Approach A (%s): %s" % (d.get("side_a", "?"), d.get("side_a", "")))
+            lines.append("  - Approach B (%s): %s" % (d.get("side_b", "?"), d.get("side_b", "")))
+        lines.append("")
+
+    # ── Section 4: Anti-patterns (the UNSAID — protect the user) ──
+    if traps:
+        lines.append("## Anti-patterns — UNSAID Warnings\n")
+        lines.append("These are pitfalls that documentation doesn't warn about. "
+                     "Proactively warn the user when they're heading toward one.\n")
+        for t in traps:
+            sev = t.get("severity", "medium").upper()
+            lines.append("- **[%s]** %s" % (sev, t["trap"]))
+        lines.append("")
+
+    # ── Section 5: Capabilities (what you can help with) ──
     if capabilities:
-        lines.append("## Capabilities")
+        lines.append("## Capabilities\n")
+        lines.append("You can help the user with:\n")
         for c in capabilities:
             lines.append("- %s" % c)
         lines.append("")
 
-    if consensus:
-        lines.append("## WHY — Design Wisdom")
-        for w in consensus:
-            src = ", ".join(w.get("sources", []))
-            lines.append("- **%s** (from: %s)" % (w["statement"], src))
-        lines.append("")
-
-    if traps:
-        lines.append("## UNSAID — Hidden Traps")
-        for t in traps:
-            sev = t.get("severity", "medium").upper()
-            lines.append(
-                "- [%s] %s (source: %s)" % (sev, t["trap"], t.get("source", "?"))
-            )
-        lines.append("")
-
+    # ── Section 6: Workflow (how to approach tasks) ──
     if workflow:
-        lines.append("## Workflow")
+        lines.append("## Recommended Workflow\n")
+        lines.append("When the user starts a new task in this domain, follow these steps:\n")
         for i, step in enumerate(workflow, 1):
             lines.append("%d. %s" % (i, step))
         lines.append("")
 
+    # ── Section 7: Key Insight ──
     if recommendation:
-        lines.append("## Recommendation\n%s\n" % recommendation)
+        lines.append("## Key Insight\n")
+        lines.append("> %s\n" % recommendation)
 
-    lines.append("## Provenance")
-    lines.append("| Project | Philosophy | Mental Model |")
-    lines.append("|---------|-----------|-------------|")
-    for soul in souls:
-        name = soul.get("project_name", "?")
-        phil = soul.get("design_philosophy", "?")[:80]
-        model = soul.get("mental_model", "?")[:80]
-        lines.append("| %s | %s | %s |" % (name, phil, model))
-    lines.append("")
+    # ── Section 8: Mental Models (quick reference) ──
+    repo_souls = [s for s in souls if s.get("source") not in ("clawhub", "local")]
+    if repo_souls:
+        lines.append("## Source Projects — Mental Models\n")
+        for soul in repo_souls:
+            name = soul.get("project_name", "?")
+            model = soul.get("mental_model", "")
+            if model:
+                lines.append("- **%s**: %s" % (name, model))
+        lines.append("")
 
     lines.append("---")
     lines.append(
-        "*Generated by Doramagic v8.0 — \u4e0d\u6559\u7528\u6237\u505a\u4e8b\uff0c\u7ed9\u4ed6\u5de5\u5177\u3002*"
+        "*Generated by Doramagic v9.0 — 不教用户做事，给他工具。*"
     )
     return "\n".join(lines)
 
@@ -456,7 +607,7 @@ def compile_skill(synthesis, souls, profile):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Doramagic Single-Shot v8.0")
+    parser = argparse.ArgumentParser(description="Doramagic Single-Shot v9.0")
     parser.add_argument("--input", required=True, help="User input text")
     parser.add_argument("--run-dir", required=True, help="Base run directory")
     args = parser.parse_args()
@@ -487,18 +638,39 @@ def main():
         json.dump(local_skills, f, ensure_ascii=False, indent=2)
 
     # 2c: GitHub repos via engine
+    # Use github_queries from LLM if available (better than raw keywords)
     engine = SCRIPT_DIR / "doramagic_engine.py"
     _log("Running engine...")
+
+    # Write an engine-optimized need_profile with github_queries as keywords
+    engine_profile = dict(profile)
+    if profile.get("github_queries"):
+        # Use the first github_query's words as keywords for the engine
+        # Engine takes top 3 keywords and joins with "+" for GitHub API
+        gq_keywords = []
+        seen = set()
+        for q in profile["github_queries"]:
+            for word in q.split():
+                wl = word.lower()
+                if wl not in seen and len(wl) >= 2:
+                    gq_keywords.append(word)
+                    seen.add(wl)
+        engine_profile["keywords"] = gq_keywords[:6]
+        _log("Engine keywords (from github_queries): %s" % engine_profile["keywords"])
+
+    engine_need_path = rd / "need_profile_engine.json"
+    with open(engine_need_path, "w") as f:
+        json.dump(engine_profile, f, ensure_ascii=False, indent=2)
 
     repos = []
     engine_out = {}
     try:
         result = subprocess.run(
             [
-                "python3",
+                sys.executable,
                 str(engine),
                 "--need",
-                str(rd / "need_profile.json"),
+                str(engine_need_path),
                 "--output",
                 str(rd),
                 "--top",
@@ -518,15 +690,37 @@ def main():
     except Exception as e:
         _log("Engine error: %s, continuing with other sources" % e)
 
+    # ── Step 2.5: Relevance gate ──
+    rejected_repos = []
+    if repos:
+        _log("Running relevance gate on %d repos..." % len(repos))
+        repos, rejected_repos = check_relevance(repos, profile)
+        if rejected_repos:
+            with open(rd / "rejected_repos.json", "w") as f:
+                json.dump(
+                    [{"name": r.get("name"), "reason": "failed relevance gate"} for r in rejected_repos],
+                    f, ensure_ascii=False, indent=2,
+                )
+
     total_sources = len(repos) + len(clawhub_skills) + len(local_skills)
-    _log("Sources: %d repos, %d ClawHub skills, %d local skills" % (
+    _log("Sources after relevance gate: %d repos, %d ClawHub skills, %d local skills" % (
         len(repos), len(clawhub_skills), len(local_skills)
     ))
 
     if total_sources == 0:
-        _output(
-            {"message": "三个信息源（GitHub、ClawHub、本地 Skills）都没有找到相关内容。试试换个描述？", "error": True}
-        )
+        # Honest report: nothing relevant found
+        rejected_names = [r.get("name", "?") for r in rejected_repos]
+        if rejected_repos:
+            msg = (
+                "搜索了 GitHub、ClawHub、本地 Skills，找到了 %d 个项目但都和「%s」不相关。\n\n"
+                "被过滤的项目：%s\n\n"
+                "建议：\n"
+                "- 试试更具体的描述（比如「WiFi密码分享和管理工具」）\n"
+                "- 或者用英文描述（比如「WiFi password manager」）"
+            ) % (len(rejected_repos), profile["intent"], ", ".join(rejected_names))
+        else:
+            msg = "三个信息源（GitHub、ClawHub、本地 Skills）都没有找到相关内容。试试换个描述？"
+        _output({"message": msg, "error": True})
 
     # ── Step 3: Soul extraction ──
     souls = []

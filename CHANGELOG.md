@@ -2,6 +2,19 @@
 
 All notable changes to Doramagic are documented in this file.
 
+## [10.0.0] - 2026-03-25
+
+### Changed
+- Single-shot pipeline upgraded to v9.0: LLM-powered keyword generation replaces static dictionary
+- Relevance gate filters irrelevant repos before extraction, returns honest "not found" when appropriate
+- Skill compiler outputs actionable AI agent instruction set instead of research report
+- MIN_STARS threshold lowered to 0 to include small but relevant projects
+- Entry point simplified to python3 (no uv/venv dependency)
+
+### Fixed
+- Search keyword generation bug: Chinese input like "WiFi密码管理" now correctly generates English search terms via LLM
+- Production-to-repo version drift resolved (OpenClaw v10.0.0 synced back to Git)
+
 ## [9.2.0] - 2026-03-24
 
 ### Added

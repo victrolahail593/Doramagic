@@ -147,7 +147,7 @@ def run_dsd_checks(cards, repo_facts, community_signals) -> DSDReport:
 
 ## Quick Start
 
-Doramagic v9.2.0 is a **skill-forging skill**: you describe the expert you want, Doramagic runs its 8-phase pipeline from **A→H**, searches GitHub for the best open-source references, extracts design philosophy and community UNSAID knowledge, and forges a **Skill bundle** you can install.
+Doramagic v10.0.0 is a **skill-forging skill**: you describe the expert you want, Doramagic runs its 8-phase pipeline from **A→H**, searches GitHub for the best open-source references, extracts design philosophy and community UNSAID knowledge, and forges a **Skill bundle** you can install.
 
 The first output is **not** an app, a one-off Markdown report, or a pile of notes. The first output is a **Skill**: `SKILL.md` plus its knowledge pack, so that after installation your AI assistant behaves like a domain expert.
 
@@ -264,7 +264,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
 pip install anthropic openai google-genai
-python3 skills/doramagic/scripts/doramagic_main.py --cli \
+python3 skills/doramagic/scripts/doramagic_singleshot.py \
   --run-dir ~/clawd/doramagic/runs \
   --input "我想做一个健身与饮食指导 Skill。Please learn from https://github.com/wger-project/wger and https://github.com/TandoorRecipes/recipes . 中文优先，强调长期习惯而不是短期打卡。"
 ```
