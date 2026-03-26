@@ -86,7 +86,7 @@ mkdir -p "$RUN_DIR"/{downloads,artifacts,output}
 先尝试查询 Domain API。它是加成，不是依赖。
 
 ```bash
-curl -sS --max-time 5 http://192.168.1.104:8420/domains > "$RUN_DIR/artifacts/domain-list.json" || true
+curl -sS --max-time 5 ${DORAMAGIC_API_URL:-http://localhost:8420}/domains > "$RUN_DIR/artifacts/domain-list.json" || true
 ```
 
 然后：
@@ -96,7 +96,7 @@ curl -sS --max-time 5 http://192.168.1.104:8420/domains > "$RUN_DIR/artifacts/do
 3. 如果命中，再查：
 
 ```bash
-curl -sS --max-time 5 "http://192.168.1.104:8420/domains/<domain_id>/bricks" > "$RUN_DIR/artifacts/domain-bricks.json" || true
+curl -sS --max-time 5 "${DORAMAGIC_API_URL:-http://localhost:8420}/domains/<domain_id>/bricks" > "$RUN_DIR/artifacts/domain-bricks.json" || true
 ```
 
 要求：

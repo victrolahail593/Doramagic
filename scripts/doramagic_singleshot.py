@@ -606,11 +606,27 @@ def compile_skill(synthesis, souls, profile):
 # ── Main ──
 
 
+def _sanitize_input(raw: str) -> str:
+    """Sanitize user input to prevent shell metacharacter injection.
+
+    Doramagic expects natural language queries (e.g. "WiFi密码管理").
+    Strip shell-dangerous characters that have no place in such input.
+    """
+    # Remove characters that enable shell injection if {args} is interpolated
+    dangerous = set('`$;|&><\\')
+    sanitized = "".join(c for c in raw if c not in dangerous)
+    # Collapse double-quotes to single-quotes (prevents breaking out of "...")
+    sanitized = sanitized.replace('"', "'")
+    return sanitized.strip()
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Doramagic Single-Shot v9.0")
+    parser = argparse.ArgumentParser(description="Doramagic Single-Shot v12.0")
     parser.add_argument("--input", required=True, help="User input text")
     parser.add_argument("--run-dir", required=True, help="Base run directory")
     args = parser.parse_args()
+
+    args.input = _sanitize_input(args.input)
 
     run_dir = Path(os.path.expanduser(args.run_dir))
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")

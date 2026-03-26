@@ -115,7 +115,7 @@ domain_id: password_manager (最近似)
 **exec 做什么（可选增强）：**
 
 ```bash
-exec curl -s http://192.168.1.104:8420/domains/{domain_id}/bricks 2>/dev/null
+exec curl -s ${DORAMAGIC_API_URL:-http://localhost:8420}/domains/{domain_id}/bricks 2>/dev/null
 ```
 
 - 如果 API 返回 domain bricks（JSON 格式），将其注入 Phase C 作为先验知识，并向用户说明"命中预提取领域，提取质量将提升"

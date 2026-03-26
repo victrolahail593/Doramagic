@@ -63,4 +63,5 @@ logs/
 secrets.json
 *.key
 *.pem
-uv.lock
+# races/ contains internal experiments — do not publish
+races/

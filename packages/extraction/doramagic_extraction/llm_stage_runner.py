@@ -198,6 +198,10 @@ def _parse_and_write_cards(output_dir: str, content: str, default_subdir: str) -
             continue
         card_id = id_match.group(1)
 
+        # Security: reject card_id with path traversal characters
+        if not re.match(r'^[A-Za-z]{2,4}-\d{1,5}$', card_id):
+            continue
+
         if card_id.startswith("CC"):
             subdir = "concepts"
         elif card_id.startswith("WF"):

@@ -51,7 +51,7 @@ search_directions: ["keyword1 keyword2", "keyword3", ...]
 ### Step 1：预提取 API 查询（可选加成）
 
 ```bash
-exec curl -s http://192.168.1.104:8420/domains/{domain_id}/bricks 2>/dev/null
+exec curl -s ${DORAMAGIC_API_URL:-http://localhost:8420}/domains/{domain_id}/bricks 2>/dev/null
 ```
 
 - 如果返回 domain bricks，注入 Phase C 作为先验知识

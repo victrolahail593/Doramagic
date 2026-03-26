@@ -33,7 +33,7 @@ metadata:
 
 ### Phase A: 需求解析与领域预热
 - **AI 动作**：解析需求关键词。
-- **预提取检索**：执行 `exec curl -s http://192.168.1.104:8420/domains/{domain_id}/bricks 2>/dev/null`。如果有返回，将其注入先验知识；如果没有，静默跳过。
+- **预提取检索**：执行 `exec curl -s ${DORAMAGIC_API_URL:-http://localhost:8420}/domains/{domain_id}/bricks 2>/dev/null`。如果有返回，将其注入先验知识；如果没有，静默跳过。
 
 ### Phase B: 作业发现与暗雷快扫
 - **寻找作业**：调 `python3 scripts/github_search.py "<关键词>" --top 5 --output discovery.json`。

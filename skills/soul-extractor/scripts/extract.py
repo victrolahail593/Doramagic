@@ -52,9 +52,9 @@ def call_llm(system_prompt: str, user_prompt: str, temperature: float = 0.3) -> 
         sys.exit(1)
 
 
-def run_cmd(cmd: str, cwd: str = None) -> str:
-    """Run a shell command and return stdout."""
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=cwd)
+def run_cmd(cmd: list[str], cwd: str = None) -> str:
+    """Run a command (list form, no shell) and return stdout."""
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
     if result.returncode != 0:
         print(f"CMD FAILED: {cmd}\n{result.stderr[:500]}")
     return result.stdout
@@ -82,7 +82,7 @@ def phase0_prepare(repo_input: str, output_dir: str) -> dict:
         clone_dir = os.path.join(artifacts, "_repo")
         if not os.path.isdir(clone_dir):
             print(f"  Cloning {repo_input}...")
-            run_cmd(f"git clone --depth 1 '{repo_input}' '{clone_dir}'")
+            run_cmd(["git", "clone", "--depth", "1", repo_input, clone_dir])
         repo_path = clone_dir
     else:
         repo_path = repo_input
@@ -94,11 +94,11 @@ def phase0_prepare(repo_input: str, output_dir: str) -> dict:
 
     if not os.path.exists(compressed_xml):
         print("  Running Repomix (compressed)...")
-        run_cmd(f"npx repomix --compress --style xml -o '{compressed_xml}'", cwd=repo_path)
+        run_cmd(["npx", "repomix", "--compress", "--style", "xml", "-o", compressed_xml], cwd=repo_path)
 
     if not os.path.exists(full_xml):
         print("  Running Repomix (full)...")
-        run_cmd(f"npx repomix --style xml -o '{full_xml}'", cwd=repo_path)
+        run_cmd(["npx", "repomix", "--style", "xml", "-o", full_xml], cwd=repo_path)
 
     # Read files
     with open(compressed_xml, "r") as f:
