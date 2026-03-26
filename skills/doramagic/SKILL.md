@@ -4,7 +4,7 @@ description: >
   Doramagic: extract the soul of open-source projects — design philosophy, decision rules,
   and community wisdom compiled into injectable AI advisor packs.
   Triggers on: "dora", "doramagic", "extract soul", "extract knowledge".
-version: 10.0.0
+version: 12.0.0
 user-invocable: true
 license: MIT
 tags: [doramagic, knowledge-extraction, skill-generation]
@@ -30,3 +30,8 @@ If output has `error: true`, show the error message and stop.
 - Show the `message` field to the user exactly as-is.
 - Do NOT add your own content, analysis, or commentary.
 - Do NOT run any additional commands after the script finishes.
+
+## Self-Contained Skill Bundle
+
+The skills/doramagic/ directory mirrors packages/ and bricks/ intentionally.
+This ensures the skill is self-contained and deployable without the parent repo.

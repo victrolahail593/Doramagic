@@ -2,7 +2,75 @@
 
 All notable changes to Doramagic are documented in this file.
 
+## [12.0.0] - 2026-03-26
+
+### Added
+- Skill Architect: LLM-powered compilation with gold-standard reference skills
+- Self-repair loop: validates output, auto-fixes issues, retries
+- Per-domain safety boundaries in generated skills
+- Input sanitization against shell metacharacter injection (CSO audit fix)
+- publish_preflight.sh: automated pre-release gate for GitHub standards
+- card_id whitelist validation (path traversal prevention)
+
+### Changed
+- GitHub Actions pinned to SHA digests
+- Internal IP references replaced with environment variables in SKILL.md
+- Legacy extract.py converted from shell=True to list-form subprocess
+- uv.lock now tracked by git (removed from .gitignore)
+- races/, research/, experiments/ removed from public repo
+
+### Security
+- CSO audit: 6 HIGH findings fixed, 6 MEDIUM documented
+- Full report in .gstack/security-reports/
+
+## [11.0.0] - 2026-03-25
+
+### Added
+- Domain brick integration: 278 bricks across 34 domains injected into extraction prompts
+- Fast path synthesis: Python-only compilation (no LLM), 52s to 14s
+- GitHub search rewrite: qualifiers, README via API, relevance scoring, parallel processing
+- Debug logging mode (--debug flag)
+
+### Changed
+- Intent recognition with LLM confidence scoring
+- Socratic gate: low-confidence inputs return clarifying questions instead of blind search
+- GitHub search timeout: 360s to 60s
+
 ## [10.0.0] - 2026-03-25
+## [12.0.0] - 2026-03-26
+
+### Added
+- Skill Architect: LLM-powered compilation with gold-standard reference skills
+- Self-repair loop: validates output, auto-fixes issues, retries
+- Per-domain safety boundaries in generated skills
+- Input sanitization against shell metacharacter injection (CSO audit fix)
+- `publish_preflight.sh`: automated pre-release gate for GitHub standards
+- card_id whitelist validation (path traversal prevention)
+
+### Changed
+- GitHub Actions pinned to SHA digests
+- Internal IP references replaced with environment variables in SKILL.md
+- Legacy `extract.py` converted from `shell=True` to list-form subprocess
+- `uv.lock` now tracked by git (removed from .gitignore)
+- `races/`, `research/`, `experiments/` removed from public repo
+
+### Security
+- CSO audit: 6 HIGH findings fixed, 6 MEDIUM documented in TODOS
+- See `.gstack/security-reports/2026-03-26-cso-report.json` for details
+
+## [11.0.0] - 2026-03-25
+
+### Added
+- Domain brick integration: 278 bricks across 34 domains injected into extraction prompts
+- Fast path synthesis: Python-only compilation (no LLM), reduces 52s to 14s
+- GitHub search rewrite: qualifiers, README via API, relevance scoring, parallel processing
+
+### Changed
+- Intent recognition with LLM confidence scoring
+- Socratic gate: low-confidence inputs return clarifying questions instead of blind search
+- GitHub search timeout: 360s to 60s
+- Timing summary fix (was double-counting)
+
 
 ### Changed
 - Single-shot pipeline upgraded to v9.0: LLM-powered keyword generation replaces static dictionary
