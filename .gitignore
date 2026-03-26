@@ -98,3 +98,13 @@ brand/
 *.jpg
 *.png
 data/fixtures/platform_rules.json
+INDEX.md
+docs/brainstorm/
+docs/research/
+docs/dev-context-briefing.md
+docs/doramagic-dev-manual-v5.3.md
+docs/doramagic-product-dev-requirements.md
+docs/engineering-plan-v1.md
+docs/supplementary-dev-brief.md
+docs/dev-plan-codex-reference.md
+docs/20260320_*.md
