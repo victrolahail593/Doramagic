@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import re
 import subprocess
 import sys
@@ -53,41 +54,65 @@ LLM_MODEL = "glm-5"
 # Module-level debug logger (set in main() if --debug is passed)
 _debug_logger = None
 
+
+def _find_engine():
+    """Locate doramagic_engine.py across candidate paths.
+
+    Search order:
+      1. SCRIPT_DIR (co-located — works in OpenClaw installed layout)
+      2. skills/doramagic/scripts/ (dev layout)
+      3. DORAMAGIC_ROOT env var
+    Returns Path or None.
+    """
+    candidates = [
+        SCRIPT_DIR / "doramagic_engine.py",
+        SCRIPT_DIR.parent / "skills" / "doramagic" / "scripts" / "doramagic_engine.py",
+    ]
+    root = os.environ.get("DORAMAGIC_ROOT", "")
+    if root:
+        candidates.append(Path(root) / "scripts" / "doramagic_engine.py")
+    for c in candidates:
+        if c.exists():
+            return c
+    return None
+
+
 # ── Brick Loading ──
 
-# Domain keyword → brick file mapping (fuzzy match)
-_DOMAIN_BRICK_MAP = {
-    "health": "domain_health",
-    "medical": "domain_health",
-    "fitness": "domain_health",
-    "wellness": "domain_health",
-    "finance": "domain_finance",
-    "accounting": "domain_finance",
-    "budget": "domain_finance",
-    "expense": "domain_finance",
-    "investment": "domain_finance",
-    "note": "domain_pkm",
-    "knowledge": "domain_pkm",
-    "pkm": "domain_pkm",
-    "wiki": "domain_pkm",
-    "journal": "domain_pkm",
-    "obsidian": "domain_pkm",
-    "cloud": "domain_private_cloud",
-    "server": "domain_private_cloud",
-    "selfhost": "domain_private_cloud",
-    "self-host": "domain_private_cloud",
-    "nas": "domain_private_cloud",
-    "homelab": "domain_private_cloud",
-    "rss": "domain_info_ingestion",
-    "feed": "domain_info_ingestion",
-    "scraping": "domain_info_ingestion",
-    "crawler": "domain_info_ingestion",
-    "ingestion": "domain_info_ingestion",
-    "news": "domain_info_ingestion",
-    "home assistant": "home_assistant",
-    "smart home": "home_assistant",
-    "iot": "home_assistant",
-    "automation": "home_assistant",
+# Domain brick configs with affinity validation.
+# triggers: keywords that suggest domain relevance
+# affinity_terms: at least 1 must appear in domain/keywords to confirm (prevents cross-contamination)
+# Overly broad triggers removed: "note", "knowledge", "wiki", "cloud", "server", "news", "iot", "automation"
+_DOMAIN_BRICKS = {
+    "domain_health": {
+        "triggers": ["health", "medical", "fitness", "wellness", "exercise"],
+        "affinity_terms": ["patient", "diagnosis", "workout", "calories", "heart rate", "bmi",
+                           "exercise", "nutrition", "sleep", "weight"],
+    },
+    "domain_finance": {
+        "triggers": ["finance", "accounting", "budget", "expense", "investment", "ledger"],
+        "affinity_terms": ["transaction", "ledger", "balance", "currency", "payment",
+                           "invoice", "tax", "portfolio", "bank"],
+    },
+    "domain_pkm": {
+        "triggers": ["pkm", "obsidian", "logseq", "roam", "zettelkasten"],
+        "affinity_terms": ["markdown", "backlink", "zettelkasten", "vault", "daily note",
+                           "obsidian", "logseq", "roam", "second brain"],
+    },
+    "domain_private_cloud": {
+        "triggers": ["selfhost", "self-host", "homelab", "nas", "self hosted"],
+        "affinity_terms": ["docker", "compose", "reverse proxy", "traefik", "nginx",
+                           "self-hosted", "homelab", "nas", "portainer"],
+    },
+    "domain_info_ingestion": {
+        "triggers": ["rss", "feed reader", "scraping", "crawler", "rss reader"],
+        "affinity_terms": ["rss", "atom", "scrape", "crawl", "feed", "parser", "syndication"],
+    },
+    "home_assistant": {
+        "triggers": ["home assistant", "smart home", "hass", "home automation"],
+        "affinity_terms": ["zigbee", "zwave", "mqtt", "sensor", "thermostat", "hass",
+                           "home assistant", "esphome"],
+    },
 }
 
 # Framework keyword → brick file mapping
@@ -116,55 +141,97 @@ _FRAMEWORK_BRICK_MAP = {
 }
 
 
+def _resolve_bricks_dir():
+    """Find bricks directory across candidate paths."""
+    candidates = [
+        SCRIPT_DIR.parent / "bricks",
+        SCRIPT_DIR.parent.parent / "bricks",
+        Path(os.environ.get("DORAMAGIC_ROOT", "")) / "bricks",
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
+    return None
+
+
+def _load_bricks_from_jsonl(jsonl_path):
+    """Load brick dicts from a JSONL file."""
+    bricks = []
+    if not jsonl_path.exists():
+        return bricks
+    try:
+        with open(jsonl_path) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    bricks.append(json.loads(line))
+    except Exception:
+        pass
+    return bricks
+
+
+def _match_best_domain(domain, keywords):
+    """Find the single best-matching domain brick, with affinity validation.
+
+    Returns brick filename or None. Max-1-domain guard prevents cross-contamination.
+    """
+    domain_lower = (domain or "").lower()
+    all_text = domain_lower + " " + " ".join(kw.lower() for kw in (keywords or []))
+
+    best_domain = None
+    best_score = 0
+
+    for brick_file, config in _DOMAIN_BRICKS.items():
+        # Check if any trigger matches
+        trigger_hits = sum(1 for t in config["triggers"] if t in all_text)
+        if trigger_hits == 0:
+            continue
+
+        # Affinity validation: at least 1 affinity term must appear
+        affinity_hits = sum(1 for t in config["affinity_terms"] if t in all_text)
+        if affinity_hits == 0:
+            continue
+
+        score = trigger_hits + affinity_hits
+        if score > best_score:
+            best_score = score
+            best_domain = brick_file
+
+    return best_domain
+
+
 def load_matching_bricks(domain, keywords=None, bricks_dir=None):
     """Load bricks matching the domain and/or detected frameworks.
 
-    Returns list of brick dicts with statement, knowledge_type, confidence, tags.
+    Safeguards:
+    - Domain bricks: max-1-domain guard + affinity_terms validation
+    - Framework bricks: exact keyword match only (safe)
+    Returns list of brick dicts.
     """
     if bricks_dir is None:
-        # Auto-resolve: check SCRIPT_DIR/../bricks/ or DORAMAGIC_ROOT/bricks/
-        candidates = [
-            SCRIPT_DIR.parent / "bricks",
-            SCRIPT_DIR.parent.parent / "bricks",
-            Path(os.environ.get("DORAMAGIC_ROOT", "")) / "bricks",
-        ]
-        for c in candidates:
-            if c.exists():
-                bricks_dir = c
-                break
+        bricks_dir = _resolve_bricks_dir()
     if bricks_dir is None:
         return []
 
     bricks_dir = Path(bricks_dir)
     matched_files = set()
 
-    # Match by domain
-    domain_lower = (domain or "").lower()
-    for keyword, brick_file in _DOMAIN_BRICK_MAP.items():
-        if keyword in domain_lower:
-            matched_files.add(brick_file)
+    # Domain bricks: max-1, affinity-validated
+    best_domain = _match_best_domain(domain, keywords)
+    if best_domain:
+        matched_files.add(best_domain)
 
-    # Match by keywords (framework detection)
+    # Framework bricks: exact keyword match (safe)
     for kw in (keywords or []):
         kw_lower = kw.lower()
         if kw_lower in _FRAMEWORK_BRICK_MAP:
             matched_files.add(_FRAMEWORK_BRICK_MAP[kw_lower])
 
-    # Load bricks from matched files
+    # Load
     all_bricks = []
     for brick_file in matched_files:
         jsonl_path = bricks_dir / ("%s.jsonl" % brick_file)
-        if not jsonl_path.exists():
-            continue
-        try:
-            with open(jsonl_path) as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        brick = json.loads(line)
-                        all_bricks.append(brick)
-        except Exception:
-            pass
+        all_bricks.extend(_load_bricks_from_jsonl(jsonl_path))
 
     return all_bricks
 
@@ -327,58 +394,144 @@ class DebugLogger:
 
 # ── LLM API ──
 
-def call_llm(system_prompt, user_prompt, max_tokens=4096, stage_name=None, timeout=60):
-    """Call LLM API directly via requests. Returns response text."""
+def _is_retryable_status(status_code):
+    """Classify HTTP status: 429/5xx are retryable, 400/401/403 are fatal."""
+    if status_code == 429:
+        return True
+    if 500 <= status_code < 600:
+        return True
+    return False
+
+
+def call_llm(system_prompt, user_prompt, max_tokens=4096, stage_name=None, timeout=None,
+             max_retries=3):
+    """Call LLM API with retry + exponential backoff + jitter.
+
+    Retry policy (AWS SRE recommended):
+      - 3 attempts with full jitter: sleep = random(0, base * 2^attempt)
+      - 429/5xx → retryable; 400/401/403 → fatal (no retry)
+      - Adaptive timeout: base 30s + max_tokens / 10 (conservative for GLM-5)
+    """
     import requests
 
-    t0 = time.time()
-    resp = requests.post(
-        LLM_API_URL,
-        headers={
-            "Authorization": "Bearer " + _get_api_key(),
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": LLM_MODEL,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "max_tokens": max_tokens,
-            "temperature": 0.3,
-        },
-        timeout=timeout,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    text = data["choices"][0]["message"]["content"]
-    elapsed_ms = (time.time() - t0) * 1000
+    if timeout is None:
+        timeout = max(30, 30 + max_tokens // 10)
 
-    if _debug_logger is not None and stage_name:
-        tokens = None
-        if "usage" in data:
-            tokens = data["usage"]
-        _debug_logger.llm_call(
-            stage=stage_name,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            response=text,
-            elapsed_ms=elapsed_ms,
-            tokens=tokens,
-        )
+    last_error = None
+    for attempt in range(max_retries):
+        t0 = time.time()
+        try:
+            resp = requests.post(
+                LLM_API_URL,
+                headers={
+                    "Authorization": "Bearer " + _get_api_key(),
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": LLM_MODEL,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "max_tokens": max_tokens,
+                    "temperature": 0.3,
+                },
+                timeout=timeout,
+            )
 
+            if resp.status_code != 200:
+                if _is_retryable_status(resp.status_code) and attempt < max_retries - 1:
+                    backoff = random.uniform(0, min(30, 2 ** attempt * 2))
+                    _log("LLM API %d (attempt %d/%d), retrying in %.1fs..." % (
+                        resp.status_code, attempt + 1, max_retries, backoff))
+                    time.sleep(backoff)
+                    continue
+                resp.raise_for_status()
+
+            data = resp.json()
+            text = data["choices"][0]["message"]["content"]
+            elapsed_ms = (time.time() - t0) * 1000
+
+            if _debug_logger is not None and stage_name:
+                tokens = data.get("usage")
+                _debug_logger.llm_call(
+                    stage=stage_name,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    response=text,
+                    elapsed_ms=elapsed_ms,
+                    tokens=tokens,
+                )
+                if attempt > 0:
+                    _debug_logger.detail("LLM call succeeded on attempt %d/%d" % (attempt + 1, max_retries))
+
+            return text
+
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                backoff = random.uniform(0, min(30, 2 ** attempt * 2))
+                _log("LLM timeout/connection error (attempt %d/%d), retrying in %.1fs..." % (
+                    attempt + 1, max_retries, backoff))
+                time.sleep(backoff)
+            else:
+                _log("LLM failed after %d attempts: %s" % (max_retries, e))
+                raise
+        except requests.exceptions.HTTPError:
+            raise
+        except Exception as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                backoff = random.uniform(0, min(30, 2 ** attempt * 2))
+                _log("LLM unexpected error (attempt %d/%d): %s, retrying..." % (
+                    attempt + 1, max_retries, e))
+                time.sleep(backoff)
+            else:
+                raise
+
+    raise last_error or RuntimeError("call_llm failed after %d retries" % max_retries)
+
+
+def _repair_json(text):
+    """Attempt to repair common LLM JSON mistakes."""
+    # Remove trailing commas before } or ]
+    text = re.sub(r",\s*([}\]])", r"\1", text)
+    # Replace single quotes with double quotes (simple heuristic)
+    if "'" in text and '"' not in text:
+        text = text.replace("'", '"')
     return text
 
 
+def _extract_json_text(raw):
+    """Extract JSON string from LLM response (handles markdown blocks)."""
+    if "```json" in raw:
+        return raw.split("```json", 1)[1].split("```", 1)[0].strip()
+    if "```" in raw:
+        return raw.split("```", 1)[1].split("```", 1)[0].strip()
+    # Try to find raw JSON object/array
+    for ch, end in [("{", "}"), ("[", "]")]:
+        start = raw.find(ch)
+        if start >= 0:
+            # Find matching close from the end
+            close = raw.rfind(end)
+            if close > start:
+                return raw[start:close + 1].strip()
+    return raw.strip()
+
+
 def call_llm_json(system_prompt, user_prompt, max_tokens=4096, stage_name=None):
-    """Call LLM and parse JSON from response."""
+    """Call LLM and parse JSON from response, with repair on failure."""
     text = call_llm(system_prompt, user_prompt, max_tokens, stage_name=stage_name)
-    # Extract JSON from markdown code blocks
-    if "```json" in text:
-        text = text.split("```json", 1)[1].split("```", 1)[0]
-    elif "```" in text:
-        text = text.split("```", 1)[1].split("```", 1)[0]
-    return json.loads(text.strip())
+    json_text = _extract_json_text(text)
+    try:
+        return json.loads(json_text)
+    except json.JSONDecodeError:
+        repaired = _repair_json(json_text)
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError:
+            _log("JSON parse failed even after repair, raw: %s" % json_text[:300])
+            raise
 
 
 # ── Input Parsing ──
@@ -1495,85 +1648,94 @@ def main():
         if _debug_logger is not None:
             _debug_logger.stage("Step 2c: engine subprocess (deep search)")
 
-        engine = SCRIPT_DIR / "doramagic_engine.py"
-        _log("Fast path insufficient, running GitHub engine (60s timeout)...")
-
-        # Write an engine-optimized need_profile with github_queries as keywords
-        engine_profile = dict(profile)
-        if profile.get("github_queries"):
-            gq_keywords = []
-            seen = set()
-            for q in profile["github_queries"]:
-                for word in q.split():
-                    wl = word.lower()
-                    if wl not in seen and len(wl) >= 2:
-                        gq_keywords.append(word)
-                        seen.add(wl)
-            engine_profile["keywords"] = gq_keywords[:6]
-            _log("Engine keywords (from github_queries): %s" % engine_profile["keywords"])
+        engine = _find_engine()
+        if engine is None:
+            _log("ERROR: doramagic_engine.py not found — searched SCRIPT_DIR, skills/doramagic/scripts/, DORAMAGIC_ROOT")
             if _debug_logger is not None:
-                _debug_logger.detail("engine keywords: %s" % engine_profile["keywords"])
-
-        engine_need_path = rd / "need_profile_engine.json"
-        with open(engine_need_path, "w") as f:
-            json.dump(engine_profile, f, ensure_ascii=False, indent=2)
-
-        t0 = time.time()
-        try:
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(engine),
-                    "--need",
-                    str(engine_need_path),
-                    "--output",
-                    str(rd),
-                    "--top",
-                    "3",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-
-            # Save engine stdout and stderr in debug mode
+                _debug_logger.detail("ENGINE NOT FOUND — skipping GitHub discovery")
+                _debug_logger.timing("engine subprocess", 0)
+        else:
+            _log("Fast path insufficient, running GitHub engine (60s timeout)...")
             if _debug_logger is not None:
-                engine_stdout_path = rd / "engine_stdout.txt"
-                engine_stderr_path = rd / "engine_stderr.txt"
-                engine_stdout_path.write_text(result.stdout, encoding="utf-8")
-                engine_stderr_path.write_text(result.stderr, encoding="utf-8")
-                _debug_logger.detail("engine returncode=%d" % result.returncode)
-                _debug_logger.detail("engine stdout (%d bytes) → %s" % (
-                    len(result.stdout), engine_stdout_path))
-                _debug_logger.detail("engine stderr (%d bytes) → %s" % (
-                    len(result.stderr), engine_stderr_path))
-                if result.stdout.strip():
-                    _debug_logger.detail("engine stdout preview: %s" % result.stdout[:300])
-                if result.stderr.strip():
-                    _debug_logger.detail("engine stderr preview: %s" % result.stderr[:300])
+                _debug_logger.detail("engine found at: %s" % engine)
 
-            if result.returncode == 0 and result.stdout.strip():
-                engine_out = json.loads(result.stdout)
-                repos = engine_out.get("repos", engine_out.get("repos_analyzed", []))
+        if engine is not None:
+            # Write an engine-optimized need_profile with github_queries as keywords
+            engine_profile = dict(profile)
+            if profile.get("github_queries"):
+                gq_keywords = []
+                seen = set()
+                for q in profile["github_queries"]:
+                    for word in q.split():
+                        wl = word.lower()
+                        if wl not in seen and len(wl) >= 2:
+                            gq_keywords.append(word)
+                            seen.add(wl)
+                engine_profile["keywords"] = gq_keywords[:6]
+                _log("Engine keywords (from github_queries): %s" % engine_profile["keywords"])
                 if _debug_logger is not None:
-                    _debug_logger.detail("engine found %d repos" % len(repos))
-                    for r in repos:
-                        _debug_logger.detail("  repo: %s" % r.get("name", "?"))
-            else:
-                _log("Engine returned no repos: %s" % result.stderr[-200:])
-                if _debug_logger is not None:
-                    _debug_logger.detail("engine returned no repos — stderr tail: %s" % result.stderr[-200:])
-        except subprocess.TimeoutExpired:
-            _log("Engine timed out (60s), continuing with ClawHub/local sources")
-            if _debug_logger is not None:
-                _debug_logger.detail("engine TIMED OUT after 60s")
-        except Exception as e:
-            _log("Engine error: %s, continuing with other sources" % e)
-            if _debug_logger is not None:
-                _debug_logger.detail("engine ERROR: %s" % e)
+                    _debug_logger.detail("engine keywords: %s" % engine_profile["keywords"])
 
-        if _debug_logger is not None:
-            _debug_logger.timing("engine subprocess", (time.time() - t0) * 1000)
+            engine_need_path = rd / "need_profile_engine.json"
+            with open(engine_need_path, "w") as f:
+                json.dump(engine_profile, f, ensure_ascii=False, indent=2)
+
+            t0 = time.time()
+            try:
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(engine),
+                        "--need",
+                        str(engine_need_path),
+                        "--output",
+                        str(rd),
+                        "--top",
+                        "3",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+
+                # Save engine stdout and stderr in debug mode
+                if _debug_logger is not None:
+                    engine_stdout_path = rd / "engine_stdout.txt"
+                    engine_stderr_path = rd / "engine_stderr.txt"
+                    engine_stdout_path.write_text(result.stdout, encoding="utf-8")
+                    engine_stderr_path.write_text(result.stderr, encoding="utf-8")
+                    _debug_logger.detail("engine returncode=%d" % result.returncode)
+                    _debug_logger.detail("engine stdout (%d bytes) → %s" % (
+                        len(result.stdout), engine_stdout_path))
+                    _debug_logger.detail("engine stderr (%d bytes) → %s" % (
+                        len(result.stderr), engine_stderr_path))
+                    if result.stdout.strip():
+                        _debug_logger.detail("engine stdout preview: %s" % result.stdout[:300])
+                    if result.stderr.strip():
+                        _debug_logger.detail("engine stderr preview: %s" % result.stderr[:300])
+
+                if result.returncode == 0 and result.stdout.strip():
+                    engine_out = json.loads(result.stdout)
+                    repos = engine_out.get("repos", engine_out.get("repos_analyzed", []))
+                    if _debug_logger is not None:
+                        _debug_logger.detail("engine found %d repos" % len(repos))
+                        for r in repos:
+                            _debug_logger.detail("  repo: %s" % r.get("name", "?"))
+                else:
+                    _log("Engine returned no repos: %s" % result.stderr[-200:])
+                    if _debug_logger is not None:
+                        _debug_logger.detail("engine returned no repos — stderr tail: %s" % result.stderr[-200:])
+            except subprocess.TimeoutExpired:
+                _log("Engine timed out (60s), continuing with ClawHub/local sources")
+                if _debug_logger is not None:
+                    _debug_logger.detail("engine TIMED OUT after 60s")
+            except Exception as e:
+                _log("Engine error: %s, continuing with other sources" % e)
+                if _debug_logger is not None:
+                    _debug_logger.detail("engine ERROR: %s" % e)
+
+            if _debug_logger is not None:
+                _debug_logger.timing("engine subprocess", (time.time() - t0) * 1000)
 
     # ── Step 2.5: Relevance gate ──
     if _debug_logger is not None:
