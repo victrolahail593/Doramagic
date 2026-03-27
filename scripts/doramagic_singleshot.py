@@ -39,6 +39,7 @@ import json
 import os
 import random
 import re
+import threading
 import subprocess
 import sys
 import time
@@ -146,8 +147,10 @@ def _resolve_bricks_dir():
     candidates = [
         SCRIPT_DIR.parent / "bricks",
         SCRIPT_DIR.parent.parent / "bricks",
-        Path(os.environ.get("DORAMAGIC_ROOT", "")) / "bricks",
     ]
+    root = os.environ.get("DORAMAGIC_ROOT", "")
+    if root:
+        candidates.append(Path(root) / "bricks")
     for c in candidates:
         if c.exists():
             return c
@@ -176,19 +179,21 @@ def _match_best_domain(domain, keywords):
     Returns brick filename or None. Max-1-domain guard prevents cross-contamination.
     """
     domain_lower = (domain or "").lower()
-    all_text = domain_lower + " " + " ".join(kw.lower() for kw in (keywords or []))
+    all_text = domain_lower + " " + " ".join(str(kw).lower() for kw in (keywords or []) if kw)
 
     best_domain = None
     best_score = 0
 
     for brick_file, config in _DOMAIN_BRICKS.items():
-        # Check if any trigger matches
-        trigger_hits = sum(1 for t in config["triggers"] if t in all_text)
+        # Check if any trigger matches (word boundary to prevent "nas" matching "nasty")
+        trigger_hits = sum(1 for t in config["triggers"]
+                           if re.search(r"\b" + re.escape(t) + r"\b", all_text))
         if trigger_hits == 0:
             continue
 
-        # Affinity validation: at least 1 affinity term must appear
-        affinity_hits = sum(1 for t in config["affinity_terms"] if t in all_text)
+        # Affinity validation: at least 1 affinity term must appear (word boundary)
+        affinity_hits = sum(1 for t in config["affinity_terms"]
+                            if re.search(r"\b" + re.escape(t) + r"\b", all_text))
         if affinity_hits == 0:
             continue
 
@@ -244,8 +249,12 @@ def _get_api_key():
     return cfg["models"]["providers"]["bailian"]["apiKey"]
 
 
+_log_lock = threading.Lock()
+
+
 def _log(msg):
-    print(f"[singleshot] {msg}", file=sys.stderr)
+    with _log_lock:
+        print(f"[singleshot] {msg}", file=sys.stderr)
 
 
 def _output(data):
@@ -269,6 +278,7 @@ class DebugLogger:
         self._traces_dir = run_dir / run_id / "llm_traces"
         self._traces_dir.mkdir(parents=True, exist_ok=True)
         self._log_file = open(self._log_path, "w", encoding="utf-8")
+        self._lock = threading.Lock()
         self._stage_timings: list[dict] = []
         self._current_stage: str = ""
         self._stage_start: float = 0.0
@@ -280,10 +290,11 @@ class DebugLogger:
         self._write("")
 
     def _write(self, msg: str):
-        """Write to both debug.log and stderr."""
-        print(msg, file=self._log_file)
-        self._log_file.flush()
-        print("[DEBUG] %s" % msg, file=sys.stderr)
+        """Write to both debug.log and stderr (thread-safe)."""
+        with self._lock:
+            print(msg, file=self._log_file)
+            self._log_file.flush()
+            print("[DEBUG] %s" % msg, file=sys.stderr)
 
     def stage(self, name: str):
         """Log a prominent stage header with timestamp. Also records timing for previous stage."""
@@ -479,6 +490,10 @@ def call_llm(system_prompt, user_prompt, max_tokens=4096, stage_name=None, timeo
                 raise
         except requests.exceptions.HTTPError:
             raise
+        except (KeyError, ValueError, json.JSONDecodeError) as e:
+            # Deterministic parse/schema errors — do NOT retry
+            _log("LLM response parse error (not retryable): %s" % e)
+            raise
         except Exception as e:
             last_error = e
             if attempt < max_retries - 1:
@@ -508,14 +523,19 @@ def _extract_json_text(raw):
         return raw.split("```json", 1)[1].split("```", 1)[0].strip()
     if "```" in raw:
         return raw.split("```", 1)[1].split("```", 1)[0].strip()
-    # Try to find raw JSON object/array
+    # Try to find raw JSON object/array — validate after extraction
     for ch, end in [("{", "}"), ("[", "]")]:
         start = raw.find(ch)
         if start >= 0:
-            # Find matching close from the end
+            # Try progressively from rfind inward until valid JSON found
             close = raw.rfind(end)
-            if close > start:
-                return raw[start:close + 1].strip()
+            while close > start:
+                candidate = raw[start:close + 1].strip()
+                try:
+                    json.loads(candidate)
+                    return candidate
+                except json.JSONDecodeError:
+                    close = raw.rfind(end, start, close)
     return raw.strip()
 
 
@@ -1433,12 +1453,17 @@ def _score_quality(skill_md):
     cov_raw = max(0, min(100, cov_raw))
 
     # --- Evidence Quality (25%) ---
+    # Broadened: also reward project names, file refs, and concrete attribution
     knowledge_text = next((v for k, v in sections.items() if "knowledge" in k.lower()), "")
-    evidence_hits = len(re.findall(r"\[(CODE|CATALOG|BASELINE)\]|github\.com|source:|README", knowledge_text, re.I))
+    evidence_markers = len(re.findall(
+        r"\[(CODE|CATALOG|BASELINE)\]|github\.com|source:|README|from:|"
+        r"\(from:|\(source:|\(evidence:|\bfile:|\bcommit\b",
+        knowledge_text, re.I))
+    # Also count bullet items with parenthetical attribution as evidence
+    attributed = len(re.findall(r"[-*]\s+.+\(.+\)", knowledge_text))
+    evidence_hits = evidence_markers + attributed
     kb_bullets = max(1, sum(1 for l in knowledge_text.splitlines() if l.strip().startswith(("-", "*"))))
     ev_raw = min(100, (evidence_hits / kb_bullets) * 100)
-    if evidence_hits == 0:
-        ev_raw -= 25
     ev_raw = max(0, min(100, ev_raw))
 
     # --- DSD Health (20%) — Design-Soul Differentiation ---
@@ -2037,7 +2062,7 @@ def main():
                     "--top",
                     str(github_top_k),
                     "--timeout",
-                    str(engine_timeout),
+                    str(max(30, engine_timeout - 15)),
                 ],
                 capture_output=True,
                 text=True,
@@ -2170,11 +2195,20 @@ def main():
         if _debug_logger is not None:
             _debug_logger.detail("repo %s classified as %s" % (repo.get("name", "?"), repo["_repo_type"]))
 
-    # ── Step 3: Soul extraction ──
-    if _debug_logger is not None:
-        _debug_logger.stage("Step 3: soul extraction")
+    # ── Step 3: Soul extraction (with checkpoint resume) ──
+    cached_souls = _load_checkpoint(rd, "step3_souls")
+    _step3_resumed = False
+    if cached_souls and cached_souls.get("repos_count", 0) == len(repos):
+        souls = cached_souls["souls"]
+        extraction_bricks = load_matching_bricks(profile.get("domain", ""), profile.get("keywords", []))
+        _log("Resumed Step 3 from checkpoint (%d souls)" % len(souls))
+        _step3_resumed = True
 
-    # Pre-load domain bricks for extraction enrichment
+    if not _step3_resumed:
+        if _debug_logger is not None:
+            _debug_logger.stage("Step 3: soul extraction")
+
+        # Pre-load domain bricks for extraction enrichment
     extraction_bricks = load_matching_bricks(
         profile.get("domain", ""),
         profile.get("keywords", []),
@@ -2195,24 +2229,23 @@ def main():
         return extract_soul(name, local_dir, facts, bricks=extraction_bricks, repo_type=repo_type)
 
     if len(repos) > 1:
-        # Parallel extraction for multiple repos
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        # Parallel extraction — collect in input order for deterministic synthesis
+        from concurrent.futures import ThreadPoolExecutor
         _log("Parallel soul extraction for %d repos" % len(repos))
         with ThreadPoolExecutor(max_workers=min(3, len(repos))) as pool:
-            future_to_repo = {pool.submit(_extract_one, repo): repo for repo in repos}
-            for future in as_completed(future_to_repo):
-                repo = future_to_repo[future]
-                name = repo.get("name", "unknown")
-                try:
-                    soul = future.result()
-                    if soul:
-                        souls.append(soul)
-                        staging = rd / "staging" / name.replace("/", "-")
-                        staging.mkdir(parents=True, exist_ok=True)
-                        with open(staging / "repo_soul.json", "w") as f:
-                            json.dump(soul, f, ensure_ascii=False, indent=2)
-                except Exception as e:
-                    _log("Soul extraction thread failed for %s: %s" % (name, e))
+            futures = [pool.submit(_extract_one, repo) for repo in repos]
+        for i, future in enumerate(futures):
+            name = repos[i].get("name", "unknown")
+            try:
+                soul = future.result()
+                if soul:
+                    souls.append(soul)
+                    staging = rd / "staging" / name.replace("/", "-")
+                    staging.mkdir(parents=True, exist_ok=True)
+                    with open(staging / "repo_soul.json", "w") as f:
+                        json.dump(soul, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                _log("Soul extraction thread failed for %s: %s" % (name, e))
     else:
         # Single repo: no threading overhead
         for repo in repos:
@@ -2225,33 +2258,34 @@ def main():
                 with open(staging / "repo_soul.json", "w") as f:
                     json.dump(soul, f, ensure_ascii=False, indent=2)
 
-    # Also treat ClawHub skills as lightweight "souls"
-    for skill in clawhub_skills:
-        souls.append({
-            "project_name": "clawhub:%s" % skill["slug"],
-            "design_philosophy": skill.get("summary", ""),
-            "mental_model": "ClawHub skill: %s" % skill.get("name", ""),
-            "why_decisions": [],
-            "unsaid_traps": [],
-            "source": "clawhub",
-        })
+    if not _step3_resumed:
+        # Also treat ClawHub skills as lightweight "souls"
+        for skill in clawhub_skills:
+            souls.append({
+                "project_name": "clawhub:%s" % skill["slug"],
+                "design_philosophy": skill.get("summary", ""),
+                "mental_model": "ClawHub skill: %s" % skill.get("name", ""),
+                "why_decisions": [],
+                "unsaid_traps": [],
+                "source": "clawhub",
+            })
 
-    # Also include relevant local skills
-    for skill in local_skills:
-        souls.append({
-            "project_name": "local:%s" % skill["name"],
-            "design_philosophy": skill.get("summary", ""),
-            "mental_model": "Locally installed skill: %s" % skill.get("name", ""),
-            "why_decisions": [],
-            "unsaid_traps": [],
-            "source": "local",
-        })
+        # Also include relevant local skills
+        for skill in local_skills:
+            souls.append({
+                "project_name": "local:%s" % skill["name"],
+                "design_philosophy": skill.get("summary", ""),
+                "mental_model": "Locally installed skill: %s" % skill.get("name", ""),
+                "why_decisions": [],
+                "unsaid_traps": [],
+                "source": "local",
+            })
 
-    if _debug_logger is not None:
-        _debug_logger.timing("soul_extraction_total", (time.time() - t0) * 1000)
-        _debug_logger.detail("souls built: %d total (repos=%d clawhub=%d local=%d)" % (
-            len(souls), len(souls) - len(clawhub_skills) - len(local_skills),
-            len(clawhub_skills), len(local_skills)))
+        if _debug_logger is not None:
+            _debug_logger.timing("soul_extraction_total", (time.time() - t0) * 1000)
+            _debug_logger.detail("souls built: %d total (repos=%d clawhub=%d local=%d)" % (
+                len(souls), len(souls) - len(clawhub_skills) - len(local_skills),
+                len(clawhub_skills), len(local_skills)))
 
     if not souls:
         if _debug_logger is not None:
@@ -2270,7 +2304,8 @@ def main():
     ))
 
     # Checkpoint after soul extraction (most expensive step)
-    _save_checkpoint(rd, "step3_souls", {"souls": souls, "repos_count": len(repos)})
+    if not _step3_resumed:
+        _save_checkpoint(rd, "step3_souls", {"souls": souls, "repos_count": len(repos)})
 
     # ── Step 4: Community signals ──
     if _debug_logger is not None:
@@ -2397,10 +2432,13 @@ def main():
     if not quality_passed:
         _log("Quality gate FAILED (%.1f/100) — falling back to template" % quality_score["total"])
         skill_md = _compile_skill_template(syn, souls, profile, bricks=domain_bricks)
-        # Re-score template output (for logging)
-        template_score = _score_quality(skill_md)
+        # Re-score and re-save so metrics match delivered artifact
+        quality_score = _score_quality(skill_md)
+        quality_passed = quality_score["total"] >= 60.0 and not quality_score["blockers"]
+        (rd / "quality_gate.json").write_text(
+            json.dumps(quality_score, ensure_ascii=False, indent=2), encoding="utf-8")
         if _debug_logger is not None:
-            _debug_logger.detail("template fallback score: %.1f/100" % template_score["total"])
+            _debug_logger.detail("template fallback score: %.1f/100" % quality_score["total"])
     else:
         _log("Quality gate PASSED (%.1f/100)" % quality_score["total"])
 
@@ -2421,7 +2459,7 @@ def main():
     traps = syn.get("combined_traps", [])
 
     # Categorize sources
-    repo_souls = [s for s in souls if s.get("source") != "clawhub" and s.get("source") != "local"]
+    repo_souls = [s for s in souls if s.get("source") not in ("clawhub", "local", "clawhub_ref")]
     ch_souls = [s for s in souls if s.get("source") == "clawhub"]
     local_souls = [s for s in souls if s.get("source") == "local"]
 
