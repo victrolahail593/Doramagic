@@ -975,13 +975,23 @@ def read_repo_files(repo_dir, focus_files=None, max_chars=30000):
     return "\n\n".join(parts)
 
 
-def extract_soul(repo_name, repo_dir, facts, bricks=None):
+def extract_soul(repo_name, repo_dir, facts, bricks=None, repo_type=None):
     """Extract soul from one repo via LLM API.
 
     bricks: optional list of domain bricks to inject as context.
+    repo_type: "CATALOG", "TOOL", or "FRAMEWORK". CATALOG gets shallow extraction.
     """
+    is_catalog = (repo_type == "CATALOG")
     focus = facts.get("focus_files", [])
-    content = read_repo_files(repo_dir, focus)
+
+    # CATALOG repos: README only, no deep code analysis
+    if is_catalog:
+        content = read_repo_files(repo_dir, [], max_chars=8000)
+        max_tokens = 1000
+    else:
+        content = read_repo_files(repo_dir, focus)
+        max_tokens = 2000
+
     if not content:
         _log("No readable files for %s" % repo_name)
         if _debug_logger is not None:
@@ -990,6 +1000,8 @@ def extract_soul(repo_name, repo_dir, facts, bricks=None):
 
     # Build system prompt, optionally enriched with domain bricks
     system_prompt = SOUL_SYSTEM
+    if is_catalog:
+        system_prompt += "\n\nNOTE: This is a CATALOG/awesome-list, not a code project. Extract only curated knowledge and recommendations, not code architecture."
     if bricks:
         brick_lines = ["\n\nYou already know these baseline facts about this domain:"]
         for b in bricks[:5]:  # Cap at 5 to avoid prompt bloat
@@ -997,21 +1009,23 @@ def extract_soul(repo_name, repo_dir, facts, bricks=None):
             if stmt:
                 brick_lines.append("- %s" % stmt)
         brick_lines.append("\nUse this knowledge to ask deeper questions and extract non-obvious insights.")
-        system_prompt = SOUL_SYSTEM + "\n".join(brick_lines)
+        system_prompt += "\n".join(brick_lines)
 
     stage_name = "soul_extraction_%s" % re.sub(r"[^a-zA-Z0-9_-]", "_", repo_name)[:40]
     try:
         soul = call_llm_json(
             system_prompt,
             "Project: %s\n\n%s" % (repo_name, content),
-            max_tokens=2000,
+            max_tokens=max_tokens,
             stage_name=stage_name,
         )
         soul["project_name"] = repo_name
+        soul["repo_type"] = repo_type or "TOOL"
         if _debug_logger is not None:
             ndec = len(soul.get("why_decisions", []))
             ntraps = len(soul.get("unsaid_traps", []))
-            _debug_logger.detail("soul %s: %d why_decisions, %d traps" % (repo_name, ndec, ntraps))
+            _debug_logger.detail("soul %s (%s): %d why_decisions, %d traps" % (
+                repo_name, repo_type or "?", ndec, ntraps))
         return soul
     except Exception as e:
         _log("Soul extraction failed for %s: %s" % (repo_name, e))
@@ -1376,38 +1390,192 @@ def _synthesize_fast(souls, profile):
 # ── Compilation ──
 
 
-def compile_skill(synthesis, souls, profile, bricks=None):
-    """LLM-powered Skill Architect: compile raw materials into ClawHub-quality SKILL.md.
+# ── Section-split compile specs ──
 
-    v12.0: Uses LLM with reference skill + validation + self-repair loop.
-    Falls back to template if LLM fails completely.
+_COMPILE_SECTIONS = [
+    {"key": "role", "heading": "## Role",
+     "goal": "Define the AI's persona, specialization, and decision posture in this domain.",
+     "max_tokens": 700},
+    {"key": "knowledge", "heading": "## Domain Knowledge",
+     "goal": "Compile the strongest evidence-backed WHY knowledge from synthesis, repos, and bricks.",
+     "max_tokens": 1500},
+    {"key": "framework", "heading": "## Decision Framework",
+     "goal": "Explain the core trade-offs and when-to-choose-A-vs-B rules. At least 2 pairs.",
+     "max_tokens": 1100},
+    {"key": "workflow", "heading": "## Recommended Workflow",
+     "goal": "Provide a concrete step sequence (5+ steps) using the extracted design philosophy.",
+     "max_tokens": 1100},
+    {"key": "anti_patterns", "heading": "## Anti-Patterns & Safety",
+     "goal": "List traps, failure modes (3+), and safety boundaries. Prefer specific over generic.",
+     "max_tokens": 1100},
+]
+
+
+def _build_shared_compile_packet(synthesis, souls, profile, bricks, reference_content,
+                                  max_chars=12000):
+    """Build a compact shared context packet for per-section compile calls."""
+    parts = []
+    parts.append("## User Context")
+    parts.append("- Domain: %s" % profile.get("domain", "general"))
+    parts.append("- Intent: %s" % profile.get("intent", ""))
+    parts.append("- Intent (English): %s" % profile.get("intent_en", ""))
+    parts.append("- User type: %s" % profile.get("user_type", "unknown"))
+    parts.append("")
+
+    if reference_content:
+        parts.append("## Reference Skill (gold standard)")
+        parts.append(reference_content[:2500])
+        parts.append("")
+
+    contract = synthesis.get("skill_contract", {})
+    parts.append("## Synthesis Contract")
+    parts.append("- Purpose: %s" % contract.get("purpose", ""))
+    caps = contract.get("capabilities", [])[:6]
+    if caps:
+        parts.append("- Capabilities: %s" % ", ".join(caps))
+    parts.append("")
+
+    consensus = synthesis.get("consensus_whys", [])
+    if consensus:
+        parts.append("## Consensus WHYs")
+        for c in consensus[:8]:
+            stmt = c.get("statement", "") if isinstance(c, dict) else str(c)
+            parts.append("- %s" % stmt)
+        parts.append("")
+
+    traps = synthesis.get("combined_traps", [])
+    if traps:
+        parts.append("## Combined Traps")
+        for t in traps[:8]:
+            trap_text = t.get("trap", "") if isinstance(t, dict) else str(t)
+            parts.append("- %s" % trap_text)
+        parts.append("")
+
+    repo_souls = [s for s in souls if s.get("source") not in ("clawhub", "local", "clawhub_ref")]
+    if repo_souls:
+        parts.append("## Repo Souls")
+        for soul in repo_souls[:8]:
+            parts.append("- %s: philosophy=%s | model=%s" % (
+                soul.get("project_name", "?"),
+                str(soul.get("design_philosophy", ""))[:220],
+                str(soul.get("mental_model", ""))[:140],
+            ))
+        parts.append("")
+
+    if bricks:
+        parts.append("## Baseline Bricks")
+        for brick in bricks[:8]:
+            parts.append("- %s: %s" % (
+                brick.get("brick_id", "brick"),
+                str(brick.get("statement", ""))[:220],
+            ))
+        parts.append("")
+
+    packet = "\n".join(parts)
+    return packet[:max_chars]
+
+
+def _compile_one_section(spec, shared_packet, profile):
+    """Generate one section via a small LLM call. Returns markdown string."""
+    language = "Chinese" if re.search(r"[\u4e00-\u9fff]", str(profile.get("intent", ""))) else "English"
+    prompt = (
+        "Write only the markdown content for the section `%s`.\n"
+        "Goal: %s\n"
+        "Language: %s\n"
+        "Hard rules:\n"
+        "- Output only this one section.\n"
+        "- Start with the exact heading line.\n"
+        "- Be concrete and evidence-backed.\n"
+        "- Do not include YAML frontmatter or title.\n\n"
+        "%s"
+    ) % (spec["heading"], spec["goal"], language, shared_packet)
+
+    text = call_llm(
+        SKILL_ARCHITECT_SYSTEM, prompt,
+        max_tokens=spec["max_tokens"],
+        stage_name="compile_%s" % spec["key"],
+    )
+    text = _strip_code_fences(text).strip()
+    if not text.startswith(spec["heading"]):
+        text = "%s\n%s" % (spec["heading"], text)
+    return text
+
+
+def _section_fallback(spec, synthesis, profile):
+    """Deterministic fallback for a single section."""
+    if spec["key"] == "role":
+        return "## Role\nYou are a specialist assistant for %s. Prioritize extracted project rationale over generic best practices." % profile.get("domain", "this domain")
+    if spec["key"] == "knowledge":
+        whys = synthesis.get("consensus_whys", [])
+        bullets = "\n".join("- %s" % (w.get("statement", w) if isinstance(w, dict) else str(w)) for w in whys[:6])
+        return "## Domain Knowledge\n%s" % (bullets or "- Use the strongest evidence-backed design rationale available.")
+    if spec["key"] == "framework":
+        return "## Decision Framework\n- Prefer approaches aligned with extracted design philosophy.\n- Choose simpler paths before adding abstractions.\n- Reject patterns contradicting observed repo constraints."
+    if spec["key"] == "workflow":
+        return "## Recommended Workflow\n1. Read the user goal and constraints.\n2. Match to extracted philosophy.\n3. Pick the closest decision pattern.\n4. Warn about highest-risk traps.\n5. Produce the smallest viable next step."
+    return "## Anti-Patterns & Safety\n- Do not replace extracted WHY knowledge with generic advice.\n- Do not recommend workflows violating repo constraints.\n- Flag missing evidence before giving strong recommendations."
+
+
+def compile_skill(synthesis, souls, profile, bricks=None):
+    """Section-split Skill Architect: 5 small LLM calls + targeted repair.
+
+    v13.0: Replaces single-shot 6000-token call (60s timeout, 72% fallback)
+    with 5 focused calls (~700-1500 tokens each). Failed sections get individual
+    retry or deterministic fallback. Template fallback only if ALL sections fail.
     """
     domain = profile.get("domain", "general")
     user_type = profile.get("user_type", "unknown")
 
-    # 1. Select and load reference skill
+    # 1. Reference skill
     ref_level = _select_reference_level(domain, user_type)
     ref_content = _load_reference_skill(ref_level)
     if _debug_logger is not None:
         _debug_logger.detail("reference skill: level=%s, loaded=%d chars" % (ref_level, len(ref_content)))
 
-    # 2. Build compile prompt
-    prompt = _build_compile_prompt(synthesis, souls, profile, bricks, ref_content)
+    # 2. Build shared packet (compact context for all section calls)
+    shared_packet = _build_shared_compile_packet(synthesis, souls, profile, bricks, ref_content)
 
-    # 3. Round 1: LLM compile
-    try:
-        skill_md = call_llm(
-            SKILL_ARCHITECT_SYSTEM, prompt,
-            max_tokens=6000, stage_name="compile_skill",
-        )
-        skill_md = _strip_code_fences(skill_md)
-    except Exception as e:
-        _log("Skill Architect LLM failed: %s — falling back to template" % e)
-        if _debug_logger is not None:
-            _debug_logger.detail("compile LLM FAILED: %s — using template fallback" % e)
-        return _compile_skill_template(synthesis, souls, profile, bricks)
+    # 3. Generate each section with individual retry
+    sections = {}
+    failed_sections = []
+    for spec in _COMPILE_SECTIONS:
+        try:
+            sections[spec["key"]] = _compile_one_section(spec, shared_packet, profile)
+            if _debug_logger is not None:
+                _debug_logger.detail("section %s: %d lines" % (spec["key"], len(sections[spec["key"]].splitlines())))
+        except Exception as e:
+            _log("Section %s failed: %s — using fallback" % (spec["key"], e))
+            sections[spec["key"]] = _section_fallback(spec, synthesis, profile)
+            failed_sections.append(spec["key"])
 
-    # 4. Validate
+    if _debug_logger is not None:
+        _debug_logger.detail("compile: %d/%d sections via LLM, %d fallback" % (
+            len(_COMPILE_SECTIONS) - len(failed_sections), len(_COMPILE_SECTIONS), len(failed_sections)))
+
+    # 4. Assemble
+    intent = profile.get("intent_en", profile.get("intent", "compiled skill"))
+    title = re.sub(r"\s+", " ", str(intent)).strip()[:80]
+    slug = re.sub(r"[^a-zA-Z0-9\u4e00-\u9fff]+", "-", title).strip("-")[:40] or "compiled-skill"
+
+    when_to_use = (
+        "## When to Use\n"
+        "- Use when the user needs help with %s.\n"
+        "- Use when repo-specific design trade-offs matter more than generic advice.\n"
+        "- Use when explicit traps, constraints, and decision guidance are needed."
+    ) % profile.get("intent", "this task")
+
+    skill_md = "\n\n".join([
+        "---\nname: %s\ndescription: >\n  %s\n---" % (slug, intent),
+        "# %s" % title,
+        when_to_use,
+        sections["role"],
+        sections["knowledge"],
+        sections["framework"],
+        sections["workflow"],
+        sections["anti_patterns"],
+    ]).strip()
+
+    # 5. Validate and targeted repair
     issues = _validate_skill_md(skill_md, domain)
     if _debug_logger is not None:
         if issues:
@@ -1415,46 +1583,53 @@ def compile_skill(synthesis, souls, profile, bricks=None):
         else:
             _debug_logger.detail("validation PASSED")
 
-    # 5. Round 2: Fix if issues found
     if issues:
-        _log("Skill validation found %d issues, requesting LLM fix..." % len(issues))
-        try:
-            fix_prompt = (
-                "The following SKILL.md has these quality issues that must be fixed:\n\n"
-                + "\n".join("- %s" % i for i in issues)
-                + "\n\nFix ALL issues and return the complete corrected SKILL.md. "
-                + "Do not explain, just output the fixed markdown.\n\n"
-                + skill_md
-            )
-            skill_md_fixed = call_llm(
-                SKILL_ARCHITECT_SYSTEM, fix_prompt,
-                max_tokens=6000, stage_name="compile_skill_fix",
-            )
-            skill_md_fixed = _strip_code_fences(skill_md_fixed)
+        # Map issues to sections for targeted repair
+        issue_map = {
+            "safety": "anti_patterns", "anti-pattern": "anti_patterns",
+            "workflow": "workflow", "decision framework": "framework",
+            "role": "role", "knowledge": "knowledge",
+        }
+        to_repair = set()
+        for issue in issues:
+            lowered = issue.lower()
+            for needle, section_key in issue_map.items():
+                if needle in lowered:
+                    to_repair.add(section_key)
 
-            # Re-validate
-            remaining = _validate_skill_md(skill_md_fixed, domain)
-            if _debug_logger is not None:
-                _debug_logger.detail("post-fix validation: %d remaining issues" % len(remaining))
+        for spec in _COMPILE_SECTIONS:
+            if spec["key"] not in to_repair:
+                continue
+            _log("Repairing section: %s" % spec["key"])
+            try:
+                sections[spec["key"]] = _compile_one_section(spec, shared_packet, profile)
+            except Exception:
+                pass  # Keep existing version
 
-            # Check if high-risk domain still missing safety — hard block
-            is_high_risk = any(k in domain.lower() for k in _HIGH_RISK_DOMAINS)
-            safety_missing = any("safety boundary" in i.lower() or "missing safety" in i.lower() for i in remaining)
-            if is_high_risk and safety_missing:
-                _log("HIGH-RISK domain '%s' still missing safety boundary after fix — blocking output" % domain)
-                if _debug_logger is not None:
-                    _debug_logger.detail("BLOCKED: high-risk domain missing safety after 2 LLM rounds")
+        # Re-assemble
+        skill_md = "\n\n".join([
+            "---\nname: %s\ndescription: >\n  %s\n---" % (slug, intent),
+            "# %s" % title,
+            when_to_use,
+            sections["role"],
+            sections["knowledge"],
+            sections["framework"],
+            sections["workflow"],
+            sections["anti_patterns"],
+        ]).strip()
+
+        # High-risk domain safety check
+        is_high_risk = any(k in domain.lower() for k in _HIGH_RISK_DOMAINS)
+        if is_high_risk:
+            remaining = _validate_skill_md(skill_md, domain)
+            safety_missing = any("safety" in i.lower() for i in remaining)
+            if safety_missing:
+                _log("HIGH-RISK domain '%s' missing safety after repair — template fallback" % domain)
                 return _compile_skill_template(synthesis, souls, profile, bricks)
-
-            skill_md = skill_md_fixed
-        except Exception as e:
-            _log("Skill fix LLM failed: %s — using round 1 output" % e)
-            if _debug_logger is not None:
-                _debug_logger.detail("fix LLM FAILED: %s — keeping round 1" % e)
 
     # Append generation footer
     if "*Generated by Doramagic" not in skill_md:
-        skill_md += "\n\n---\n*Generated by Doramagic v12.0 — 不教用户做事，给他工具。*"
+        skill_md += "\n\n---\n*Generated by Doramagic v13.0 — 不教用户做事，给他工具。*"
 
     return skill_md
 
@@ -1620,122 +1795,111 @@ def main():
     if _debug_logger is not None:
         _debug_logger.timing("scan_local_skills", (time.time() - t0) * 1000)
 
-    # 2c: Fast path evaluation — decide if GitHub engine is needed
+    # 2c: GitHub Primary + ClawHub as depth control (never skip GitHub)
     if _debug_logger is not None:
-        _debug_logger.stage("Step 2c: fast path evaluation")
+        _debug_logger.stage("Step 2c: GitHub primary discovery")
 
-    # Check if ClawHub already has high-relevance results (score > 1.05)
-    high_relevance_clawhub = [s for s in clawhub_skills if s.get("score", 0) > 1.05]
-    has_fast_path = len(high_relevance_clawhub) >= 2
+    # ClawHub controls depth, not skip: strong catalog → top=2, else top=3
+    strong_clawhub = [s for s in clawhub_skills if s.get("score", 0) >= 1.10]
+    github_top_k = 2 if len(strong_clawhub) >= 2 else 3
 
     if _debug_logger is not None:
-        _debug_logger.detail("high_relevance_clawhub=%d (score>1.05)" % len(high_relevance_clawhub))
-        _debug_logger.detail("fast_path=%s" % has_fast_path)
+        _debug_logger.detail("strong_clawhub=%d (score>=1.10), github_top_k=%d" % (
+            len(strong_clawhub), github_top_k))
 
     repos = []
     engine_out = {}
     skip_github = False
 
-    if has_fast_path:
-        _log("Fast path: %d high-relevance ClawHub skills found, skipping GitHub engine" %
-             len(high_relevance_clawhub))
-        skip_github = True
+    # Always attempt GitHub — build engine profile
+    engine_profile = dict(profile)
+    if profile.get("github_queries"):
+        gq_keywords = []
+        seen = set()
+        for q in profile["github_queries"]:
+            for word in q.split():
+                wl = word.lower()
+                if wl not in seen and len(wl) >= 2:
+                    gq_keywords.append(word)
+                    seen.add(wl)
+        engine_profile["keywords"] = gq_keywords[:6]
         if _debug_logger is not None:
-            _debug_logger.detail("FAST PATH — skipping GitHub engine")
-            _debug_logger.timing("engine subprocess", 0)
+            _debug_logger.detail("engine keywords: %s" % engine_profile["keywords"])
+
+    engine_need_path = rd / "need_profile_engine.json"
+    with open(engine_need_path, "w") as f:
+        json.dump(engine_profile, f, ensure_ascii=False, indent=2)
+
+    # Try engine subprocess first
+    engine = _find_engine()
+    engine_timeout = 120
+    t0 = time.time()
+
+    if engine is not None:
+        _log("GitHub primary: engine at %s (top=%d, timeout=%ds)" % (engine, github_top_k, engine_timeout))
+        try:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(engine),
+                    "--need",
+                    str(engine_need_path),
+                    "--output",
+                    str(rd),
+                    "--top",
+                    str(github_top_k),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=engine_timeout,
+            )
+
+            if _debug_logger is not None:
+                (rd / "engine_stdout.txt").write_text(result.stdout, encoding="utf-8")
+                (rd / "engine_stderr.txt").write_text(result.stderr, encoding="utf-8")
+                _debug_logger.detail("engine returncode=%d, stdout=%d bytes" % (
+                    result.returncode, len(result.stdout)))
+
+            if result.returncode == 0 and result.stdout.strip():
+                engine_out = json.loads(result.stdout)
+                repos = engine_out.get("repos", engine_out.get("repos_analyzed", []))
+                if _debug_logger is not None:
+                    _debug_logger.detail("engine found %d repos" % len(repos))
+            else:
+                _log("Engine returned no repos, falling back to API search")
+                if _debug_logger is not None:
+                    _debug_logger.detail("engine no repos — stderr: %s" % result.stderr[-200:])
+        except subprocess.TimeoutExpired:
+            _log("Engine timed out (%ds), falling back to API search" % engine_timeout)
+        except Exception as e:
+            _log("Engine error: %s, falling back to API search" % e)
     else:
-        # Fall through to GitHub engine (with 60s hard timeout)
+        _log("Engine not found, using direct API search")
+
+    # API fallback: if engine returned no repos, try package-level github_search
+    if not repos:
         if _debug_logger is not None:
-            _debug_logger.stage("Step 2c: engine subprocess (deep search)")
-
-        engine = _find_engine()
-        if engine is None:
-            _log("ERROR: doramagic_engine.py not found — searched SCRIPT_DIR, skills/doramagic/scripts/, DORAMAGIC_ROOT")
+            _debug_logger.detail("attempting direct GitHub API fallback")
+        try:
+            # Import package-level search
+            pkg_community = SCRIPT_DIR.parent / "packages" / "community"
+            if str(pkg_community) not in sys.path:
+                sys.path.insert(0, str(pkg_community))
+            from doramagic_community.github_search import search_github
+            query_terms = engine_profile.get("keywords", profile.get("relevance_terms", []))
+            query_terms = [str(t).strip() for t in query_terms if str(t).strip()][:4]
+            if query_terms:
+                repos = search_github(query_terms, top_k=github_top_k)
+                _log("API fallback found %d repos" % len(repos))
+                if _debug_logger is not None:
+                    _debug_logger.detail("API fallback repos: %d" % len(repos))
+        except Exception as e:
+            _log("API fallback failed: %s" % e)
             if _debug_logger is not None:
-                _debug_logger.detail("ENGINE NOT FOUND — skipping GitHub discovery")
-                _debug_logger.timing("engine subprocess", 0)
-        else:
-            _log("Fast path insufficient, running GitHub engine (60s timeout)...")
-            if _debug_logger is not None:
-                _debug_logger.detail("engine found at: %s" % engine)
+                _debug_logger.detail("API fallback error: %s" % e)
 
-        if engine is not None:
-            # Write an engine-optimized need_profile with github_queries as keywords
-            engine_profile = dict(profile)
-            if profile.get("github_queries"):
-                gq_keywords = []
-                seen = set()
-                for q in profile["github_queries"]:
-                    for word in q.split():
-                        wl = word.lower()
-                        if wl not in seen and len(wl) >= 2:
-                            gq_keywords.append(word)
-                            seen.add(wl)
-                engine_profile["keywords"] = gq_keywords[:6]
-                _log("Engine keywords (from github_queries): %s" % engine_profile["keywords"])
-                if _debug_logger is not None:
-                    _debug_logger.detail("engine keywords: %s" % engine_profile["keywords"])
-
-            engine_need_path = rd / "need_profile_engine.json"
-            with open(engine_need_path, "w") as f:
-                json.dump(engine_profile, f, ensure_ascii=False, indent=2)
-
-            t0 = time.time()
-            try:
-                result = subprocess.run(
-                    [
-                        sys.executable,
-                        str(engine),
-                        "--need",
-                        str(engine_need_path),
-                        "--output",
-                        str(rd),
-                        "--top",
-                        "3",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                )
-
-                # Save engine stdout and stderr in debug mode
-                if _debug_logger is not None:
-                    engine_stdout_path = rd / "engine_stdout.txt"
-                    engine_stderr_path = rd / "engine_stderr.txt"
-                    engine_stdout_path.write_text(result.stdout, encoding="utf-8")
-                    engine_stderr_path.write_text(result.stderr, encoding="utf-8")
-                    _debug_logger.detail("engine returncode=%d" % result.returncode)
-                    _debug_logger.detail("engine stdout (%d bytes) → %s" % (
-                        len(result.stdout), engine_stdout_path))
-                    _debug_logger.detail("engine stderr (%d bytes) → %s" % (
-                        len(result.stderr), engine_stderr_path))
-                    if result.stdout.strip():
-                        _debug_logger.detail("engine stdout preview: %s" % result.stdout[:300])
-                    if result.stderr.strip():
-                        _debug_logger.detail("engine stderr preview: %s" % result.stderr[:300])
-
-                if result.returncode == 0 and result.stdout.strip():
-                    engine_out = json.loads(result.stdout)
-                    repos = engine_out.get("repos", engine_out.get("repos_analyzed", []))
-                    if _debug_logger is not None:
-                        _debug_logger.detail("engine found %d repos" % len(repos))
-                        for r in repos:
-                            _debug_logger.detail("  repo: %s" % r.get("name", "?"))
-                else:
-                    _log("Engine returned no repos: %s" % result.stderr[-200:])
-                    if _debug_logger is not None:
-                        _debug_logger.detail("engine returned no repos — stderr tail: %s" % result.stderr[-200:])
-            except subprocess.TimeoutExpired:
-                _log("Engine timed out (60s), continuing with ClawHub/local sources")
-                if _debug_logger is not None:
-                    _debug_logger.detail("engine TIMED OUT after 60s")
-            except Exception as e:
-                _log("Engine error: %s, continuing with other sources" % e)
-                if _debug_logger is not None:
-                    _debug_logger.detail("engine ERROR: %s" % e)
-
-            if _debug_logger is not None:
-                _debug_logger.timing("engine subprocess", (time.time() - t0) * 1000)
+    if _debug_logger is not None:
+        _debug_logger.timing("github_discovery", (time.time() - t0) * 1000)
 
     # ── Step 2.5: Relevance gate ──
     if _debug_logger is not None:
@@ -1779,6 +1943,43 @@ def main():
             msg = "三个信息源（GitHub、ClawHub、本地 Skills）都没有找到相关内容。试试换个描述？"
         _output({"message": msg, "error": True})
 
+    # ── Step 2.7: Repo type classification ──
+    # Deterministic classifier: CATALOG (awesome-lists), TOOL (apps/libs), FRAMEWORK
+    # CATALOG repos get shallow extraction (README only, no deep code analysis)
+    for repo in repos:
+        name = (repo.get("name") or "").lower()
+        desc = (repo.get("description") or "").lower()
+        readme = (repo.get("readme_text") or repo.get("readme") or "").lower()[:3000]
+
+        # CATALOG signals
+        is_catalog = False
+        if name.startswith("awesome-") or name.startswith("awesome_"):
+            is_catalog = True
+        elif readme:
+            # High external link density + no source code = catalog
+            link_count = readme.count("http://") + readme.count("https://")
+            text_len = max(len(readme), 1)
+            if link_count > 20 and link_count / text_len > 0.01:
+                is_catalog = True
+
+        # Source code presence check
+        has_code = bool(repo.get("facts", {}).get("languages") or repo.get("facts", {}).get("focus_files"))
+
+        if is_catalog:
+            repo["_repo_type"] = "CATALOG"
+        elif has_code:
+            # Check framework signals
+            frameworks = repo.get("facts", {}).get("frameworks", [])
+            if frameworks:
+                repo["_repo_type"] = "FRAMEWORK"
+            else:
+                repo["_repo_type"] = "TOOL"
+        else:
+            repo["_repo_type"] = "TOOL"
+
+        if _debug_logger is not None:
+            _debug_logger.detail("repo %s classified as %s" % (repo.get("name", "?"), repo["_repo_type"]))
+
     # ── Step 3: Soul extraction ──
     if _debug_logger is not None:
         _debug_logger.stage("Step 3: soul extraction")
@@ -1793,19 +1994,46 @@ def main():
 
     t0 = time.time()
     souls = []
-    for repo in repos:
+
+    def _extract_one(repo):
+        """Extract soul for one repo (thread-safe: LLM calls are I/O-bound)."""
         name = repo.get("name", "unknown")
         local_dir = repo.get("local_dir") or repo.get("local_path", "")
         facts = repo.get("facts", {})
+        repo_type = repo.get("_repo_type", "TOOL")
+        _log("Extracting soul: %s (%s)" % (name, repo_type))
+        return extract_soul(name, local_dir, facts, bricks=extraction_bricks, repo_type=repo_type)
 
-        _log("Extracting soul: %s" % name)
-        soul = extract_soul(name, local_dir, facts, bricks=extraction_bricks)
-        if soul:
-            souls.append(soul)
-            staging = rd / "staging" / name.replace("/", "-")
-            staging.mkdir(parents=True, exist_ok=True)
-            with open(staging / "repo_soul.json", "w") as f:
-                json.dump(soul, f, ensure_ascii=False, indent=2)
+    if len(repos) > 1:
+        # Parallel extraction for multiple repos
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        _log("Parallel soul extraction for %d repos" % len(repos))
+        with ThreadPoolExecutor(max_workers=min(3, len(repos))) as pool:
+            future_to_repo = {pool.submit(_extract_one, repo): repo for repo in repos}
+            for future in as_completed(future_to_repo):
+                repo = future_to_repo[future]
+                name = repo.get("name", "unknown")
+                try:
+                    soul = future.result()
+                    if soul:
+                        souls.append(soul)
+                        staging = rd / "staging" / name.replace("/", "-")
+                        staging.mkdir(parents=True, exist_ok=True)
+                        with open(staging / "repo_soul.json", "w") as f:
+                            json.dump(soul, f, ensure_ascii=False, indent=2)
+                except Exception as e:
+                    _log("Soul extraction thread failed for %s: %s" % (name, e))
+    else:
+        # Single repo: no threading overhead
+        for repo in repos:
+            soul = _extract_one(repo)
+            if soul:
+                name = repo.get("name", "unknown")
+                souls.append(soul)
+                staging = rd / "staging" / name.replace("/", "-")
+                staging.mkdir(parents=True, exist_ok=True)
+                with open(staging / "repo_soul.json", "w") as f:
+                    json.dump(soul, f, ensure_ascii=False, indent=2)
 
     # Also treat ClawHub skills as lightweight "souls"
     for skill in clawhub_skills:
