@@ -14,6 +14,8 @@ Key facts:
 - Model strategy: **model-agnostic** (Claude, Gemini, GPT, Ollama -- any LLM works)
 - Repository: `https://github.com/tangweigang-jpg/Doramagic.git`
 
+**Important:** Doramagic must be installed and invoked via `/dora` to function. It cannot be used by reading documentation alone -- the value is in the 7-phase extraction pipeline that runs against real GitHub repositories.
+
 ## What You Are Installing
 
 Doramagic itself is the **forge** -- a skill that responds to `/dora`. Each run produces a **new Skill bundle** for your target domain: the actual product you keep and reuse.
@@ -37,9 +39,30 @@ After installation, your AI assistant inherits the target domain's design philos
 - At least one LLM model accessible via API
 - API keys for the providers you declare in `models.json`
 
-## Configure `models.json`
+## Install Method 1: OpenClaw
 
-Create or edit `models.json` at the repo root (or copy from `models.json.example`). Doramagic routes by **capability**, not by brand name, so one model is enough:
+### Step 1. Clone the repo
+
+```bash
+git clone https://github.com/tangweigang-jpg/Doramagic.git ~/Doramagic
+```
+
+### Step 2. Install the skill
+
+```bash
+mkdir -p ~/.openclaw/skills
+cp -r ~/Doramagic/skills/doramagic ~/.openclaw/skills/dora
+```
+
+### Step 3. Configure models
+
+Configure `models.json` **inside the installed skill directory**:
+
+```bash
+cp ~/.openclaw/skills/dora/models.json.example ~/.openclaw/skills/dora/models.json
+```
+
+Edit `~/.openclaw/skills/dora/models.json` -- declare the models you have access to. Doramagic routes by **capability**, not by brand name, so one model is enough:
 
 ```json
 {
@@ -59,7 +82,7 @@ Create or edit `models.json` at the repo root (or copy from `models.json.example
 }
 ```
 
-Export the keys you need:
+Export the API keys for the providers you declared:
 
 ```bash
 export ANTHROPIC_API_KEY="..."
@@ -67,29 +90,11 @@ export GOOGLE_API_KEY="..."    # optional
 export OPENAI_API_KEY="..."    # optional
 ```
 
-## Install Method 1: OpenClaw
-
-### Step 1. Clone the repo
-
-```bash
-git clone https://github.com/tangweigang-jpg/Doramagic.git ~/Doramagic
-cd ~/Doramagic
-```
-
-### Step 2. Link the skill into OpenClaw
-
-```bash
-mkdir -p ~/.openclaw/skills
-cp -r ~/Doramagic/skills/doramagic ~/.openclaw/skills/dora
-```
-
-The `skills/doramagic/` directory is self-contained -- it includes all packages, bricks, and configuration.
-
-### Step 3. Restart your OpenClaw session
+### Step 4. Restart your OpenClaw session
 
 Open a fresh session so the host reloads the `dora` skill.
 
-### Step 4. Use `/dora`
+### Step 5. Use `/dora`
 
 ```text
 /dora I want a Skill for reviewing API designs.
@@ -97,7 +102,7 @@ Open a fresh session so the host reloads the `dora` skill.
      and https://github.com/encode/django-rest-framework
 ```
 
-### Step 5. Install the generated Skill bundle
+### Step 6. Install the generated Skill bundle
 
 After Doramagic completes, copy the delivery bundle:
 
@@ -118,21 +123,28 @@ Then use it:
 
 ```bash
 git clone https://github.com/tangweigang-jpg/Doramagic.git ~/Doramagic
-cd ~/Doramagic
 ```
 
-### Step 2. Link the skill into Claude Code
+### Step 2. Install the skill
 
 ```bash
 mkdir -p ~/.claude/skills
 cp -r ~/Doramagic/skills/doramagic ~/.claude/skills/dora
 ```
 
-### Step 3. Restart Claude Code
+### Step 3. Configure models
+
+```bash
+cp ~/.claude/skills/dora/models.json.example ~/.claude/skills/dora/models.json
+```
+
+Edit `~/.claude/skills/dora/models.json` with your available models and export API keys (see Method 1, Step 3 for format).
+
+### Step 4. Restart Claude Code
 
 Open a new session so the host picks up the skill.
 
-### Step 4. Use `/dora`
+### Step 5. Use `/dora`
 
 ```text
 /dora I want a Skill for managing personal knowledge and reading notes.
@@ -140,7 +152,7 @@ Open a new session so the host picks up the skill.
      and https://github.com/logseq/logseq
 ```
 
-### Step 5. Install the generated Skill bundle
+### Step 6. Install the generated Skill bundle
 
 ```bash
 mkdir -p ~/.claude/skills/pkm-advisor
@@ -161,7 +173,15 @@ uv pip install -e .
 uv pip install anthropic openai google-genai  # install SDK for your provider(s)
 ```
 
-### Step 2. Run from source
+### Step 2. Configure models
+
+```bash
+cp models.json.example models.json
+```
+
+Edit `models.json` with your available models and export API keys.
+
+### Step 3. Run from source
 
 ```bash
 python3 skills/doramagic/scripts/doramagic_main.py --cli \
@@ -200,7 +220,7 @@ No. One capable model is enough. Adding more improves routing flexibility and co
 
 ### Can I delete the cloned repo after installation?
 
-Yes. The `skills/doramagic/` directory is self-contained -- all packages, bricks, and config are included.
+Yes. The installed skill directory is self-contained -- all packages, bricks, and your `models.json` are inside it.
 
 ### Where do I find the generated skill bundle?
 

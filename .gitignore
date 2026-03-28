@@ -84,3 +84,4 @@ scripts/dev/capture_eval_baseline.py
 .claire/
 .gstack/
 openclaw-test/
+models.json
