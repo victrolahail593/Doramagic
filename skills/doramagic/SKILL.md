@@ -4,14 +4,14 @@ description: >
   Doramagic: extract the soul of open-source projects — design philosophy, decision rules,
   and community wisdom compiled into injectable AI advisor packs.
   Triggers on: "dora", "doramagic", "extract soul", "extract knowledge".
-version: 12.1.0
+version: 12.1.1
 user-invocable: true
 license: MIT
 tags: [doramagic, knowledge-extraction, skill-generation]
 metadata: {"openclaw":{"emoji":"🪄","skillKey":"dora","category":"builder","requires":{"bins":["python3","git","bash"]}}}
 ---
 
-python3 {baseDir}/scripts/doramagic_singleshot.py --input "{args}" --run-dir ~/.doramagic/runs/
+python3 {baseDir}/scripts/doramagic_main.py --input "{args}" --run-dir ~/.doramagic/runs/
 
 ---
 

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .budget import BudgetSnapshot
 from .envelope import ModuleResultEnvelope
@@ -15,12 +15,15 @@ from .skill import PlatformRules
 class ExecutorConfig(BaseModel):
     """Runtime configuration passed to every phase executor."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     schema_version: str = "dm.executor-config.v1"
     run_dir: Path
     budget_remaining: BudgetSnapshot
     concurrency_limit: int = Field(default=3, ge=1, le=5)
     platform_rules: PlatformRules
     dry_run: bool = False
+    event_bus: Any = None
 
 
 @runtime_checkable

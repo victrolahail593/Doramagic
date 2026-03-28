@@ -9,10 +9,12 @@ from pydantic import BaseModel, Field
 from doramagic_contracts.base import (
     DiscoveryCandidate,
     EvidenceRef,
+    ExtractionAggregateContract,
     NeedProfile,
     Priority,
     ProjectFingerprint,
     RepoRef,
+    RoutingDecision,
     SearchCoverageItem,
     SignalKind,
 )
@@ -58,6 +60,7 @@ class ApiDomainHint(BaseModel):
 class DiscoveryInput(BaseModel):
     schema_version: str = "dm.discovery-input.v1"
     need_profile: NeedProfile
+    routing: Optional[RoutingDecision] = None
     api_hint: Optional[ApiDomainHint] = None
     config: DiscoveryConfig
 
@@ -67,6 +70,9 @@ class DiscoveryResult(BaseModel):
     candidates: list[DiscoveryCandidate]
     search_coverage: list[SearchCoverageItem]
     no_candidate_reason: Optional[str] = None
+    excluded_candidates: list[DiscoveryCandidate] = []
+    search_evidence: list[str] = []
+    candidate_count: int = 0
 
 
 # --- Compare ---
@@ -133,6 +139,7 @@ class SynthesisInput(BaseModel):
     schema_version: str = "dm.synthesis-input.v1"
     need_profile: NeedProfile
     discovery_result: DiscoveryResult
+    extraction_aggregate: Optional[ExtractionAggregateContract] = None
     project_summaries: list[ExtractedProjectSummary]
     comparison_result: CompareOutput
     community_knowledge: CommunityKnowledge
@@ -166,3 +173,10 @@ class SynthesisReportData(BaseModel):
     selected_knowledge: list[SynthesisDecision]
     excluded_knowledge: list[SynthesisDecision]
     open_questions: list[str]
+    global_theses: list[str] = []
+    common_why: list[str] = []
+    divergences: list[str] = []
+    source_provenance_matrix: dict[str, list[str]] = {}
+    unknowns: list[str] = []
+    compile_ready: bool = False
+    compile_brief_by_section: dict[str, list[str]] = {}

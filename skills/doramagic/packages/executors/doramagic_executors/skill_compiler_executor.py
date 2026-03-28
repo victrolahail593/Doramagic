@@ -1,197 +1,67 @@
-"""Phase F executor: Compile synthesis into SKILL.md bundle with WHY/UNSAID sections.
-
-Two paths:
-1. Full path: run_skill_compiler() produces complete bundle from synthesis data
-2. Fallback path: if synthesis data is too thin, compile directly from souls
-   (replicating singleshot's compile_skill() logic for WHY/UNSAID sections)
-"""
+"""Phase E executor: section-split compile with compile_ready guard."""
 
 from __future__ import annotations
 
-import json
-import os
-import re
 import time
-from pathlib import Path
 
 from pydantic import BaseModel
 
 from doramagic_contracts.envelope import ModuleResultEnvelope, RunMetrics, WarningItem
-from doramagic_contracts.executor import ExecutorConfig
 from doramagic_contracts.skill import SkillCompilerInput
+from doramagic_skill_compiler.compiler import build_compile_bundle, compile_ready
 
 
 class SkillCompilerExecutor:
-    """Compiles synthesis results into SKILL.md + PROVENANCE.md + LIMITATIONS.md.
-
-    If the formal skill compiler produces empty or blocked output,
-    falls back to direct compilation from souls (like singleshot).
-    """
-
     async def execute(
-        self, input: BaseModel, adapter: object, config: ExecutorConfig,
+        self, input: BaseModel, adapter: object, config
     ) -> ModuleResultEnvelope:
-        start = time.monotonic()
-
+        started = time.monotonic()
         if not isinstance(input, SkillCompilerInput):
-            return self._error("Expected SkillCompilerInput", start)
+            return self._error("Expected SkillCompilerInput", started)
 
-        os.environ["DORAMAGIC_SKILL_COMPILER_OUTPUT_DIR"] = str(config.run_dir / "staging")
+        if not compile_ready(input.synthesis_report):
+            return ModuleResultEnvelope(
+                module_name="SkillCompiler",
+                status="blocked",
+                warnings=[WarningItem(code="COMPILE_NOT_READY", message="Synthesis bundle is not compile-ready")],
+                data=None,
+                metrics=self._metrics(started),
+            )
 
-        # Try formal compiler
-        try:
-            from doramagic_skill_compiler.compiler import run_skill_compiler
-            result = run_skill_compiler(input)
+        phase_dir = config.run_dir / "staging" / "phase_e"
+        bundle = await build_compile_bundle(input, adapter, phase_dir)
 
-            # Check if it produced actual content
-            if result.status == "ok" and result.data:
-                return result
-        except Exception as e:
-            pass  # Fall through to fallback
-
-        # Fallback: compile directly from synthesis data
-        return self._fallback_compile(input, config, start)
-
-    def _fallback_compile(
-        self, input: SkillCompilerInput, config: ExecutorConfig, start: float,
-    ) -> ModuleResultEnvelope:
-        """Direct compilation with WHY/UNSAID sections.
-
-        Replicates singleshot's compile_skill() logic to ensure
-        the core product value (WHY + UNSAID) is always present.
-        """
-        staging = config.run_dir / "staging"
-        staging.mkdir(parents=True, exist_ok=True)
-
-        need = input.need_profile
-        synthesis = input.synthesis_report
-        topic = need.intent[:50] if need.intent else "tool"
-        skill_name = re.sub(r"[^a-zA-Z0-9\u4e00-\u9fff_-]", "-", topic)[:30]
-
-        # Build WHY section from consensus/selected knowledge
-        consensus = []
-        traps = []
-        capabilities = []
-        if isinstance(synthesis, dict):
-            for d in synthesis.get("selected_knowledge", synthesis.get("consensus", [])):
-                stmt = d.get("statement", "") if isinstance(d, dict) else str(d)
-                if "[TRAP]" in stmt:
-                    traps.append(stmt.replace("[TRAP] ", ""))
-                else:
-                    consensus.append(stmt)
-            capabilities = [
-                d.get("statement", "") if isinstance(d, dict) else str(d)
-                for d in synthesis.get("consensus", [])[:5]
-            ]
-
-        # Build SKILL.md with WHY + UNSAID (core product value)
-        lines = [
-            "---",
-            f"name: {skill_name}",
-            f"description: >",
-            f"  {need.intent}",
-            "version: 1.0.0",
-            "tags: [doramagic-generated]",
-            "---",
-            "",
-            f"## Purpose",
-            f"",
-            f"{need.intent}",
-            "",
-        ]
-
-        # Capabilities
-        if capabilities:
-            lines.append("## Capabilities")
-            lines.append("")
-            for cap in capabilities:
-                lines.append(f"- {cap}")
-            lines.append("")
-
-        # WHY — Design Wisdom (core product value)
-        if consensus:
-            lines.append("## WHY — Design Wisdom")
-            lines.append("")
-            for i, why in enumerate(consensus, 1):
-                lines.append(f"{i}. {why}")
-            lines.append("")
-
-        # UNSAID — Hidden Traps (core product value)
-        if traps:
-            lines.append("## UNSAID — Hidden Traps")
-            lines.append("")
-            for trap in traps:
-                lines.append(f"- {trap}")
-            lines.append("")
-
-        # Workflow
-        lines.extend([
-            "## Workflow",
-            "",
-            "1. Analyze the user's request",
-            "2. Apply the design wisdom above",
-            "3. Watch for the hidden traps",
-            "",
-            "---",
-            f"*Generated by Doramagic v9.0 — 不教用户做事，给他工具。*",
-        ])
-
-        skill_md = "\n".join(lines)
-
-        # Write files
-        skill_dir = staging / skill_name
-        skill_dir.mkdir(parents=True, exist_ok=True)
-
-        (skill_dir / "SKILL.md").write_text(skill_md, encoding="utf-8")
-        (skill_dir / "PROVENANCE.md").write_text(
-            f"# Provenance\n\nGenerated by Doramagic from {len(consensus)} knowledge items.\n"
-            f"Keywords: {', '.join(need.keywords)}\n",
-            encoding="utf-8",
-        )
-        (skill_dir / "LIMITATIONS.md").write_text(
-            f"# Limitations\n\nThis skill was generated via fallback compilation.\n"
-            f"Formal synthesis may have been incomplete.\n",
-            encoding="utf-8",
-        )
-
-        elapsed = int((time.monotonic() - start) * 1000)
         return ModuleResultEnvelope(
             module_name="SkillCompiler",
-            status="degraded",
-            warnings=[WarningItem(
-                code="W_FALLBACK_COMPILE",
-                message="Used fallback compilation (formal compiler blocked or empty)",
-            )],
-            data={
-                "skill_md_path": str(skill_dir / "SKILL.md"),
-                "provenance_md_path": str(skill_dir / "PROVENANCE.md"),
-                "limitations_md_path": str(skill_dir / "LIMITATIONS.md"),
-                "readme_md_path": "",
-                "build_manifest": {"fallback": True, "knowledge_items": len(consensus) + len(traps)},
-            },
-            metrics=RunMetrics(
-                wall_time_ms=elapsed, llm_calls=0,
-                prompt_tokens=0, completion_tokens=0,
-                estimated_cost_usd=0.0,
-            ),
+            status="ok",
+            warnings=[],
+            data=bundle,
+            metrics=self._metrics(started),
         )
 
-    def _error(self, msg: str, start: float) -> ModuleResultEnvelope:
-        elapsed = int((time.monotonic() - start) * 1000)
+    def _error(self, message: str, started: float) -> ModuleResultEnvelope:
         return ModuleResultEnvelope(
             module_name="SkillCompiler",
-            status="error", error_code="E_INPUT_INVALID",
-            warnings=[WarningItem(code="TYPE", message=msg)],
-            metrics=RunMetrics(
-                wall_time_ms=elapsed, llm_calls=0,
-                prompt_tokens=0, completion_tokens=0, estimated_cost_usd=0.0,
-            ),
+            status="error",
+            error_code="E_INPUT_INVALID",
+            warnings=[WarningItem(code="TYPE", message=message)],
+            data=None,
+            metrics=self._metrics(started),
+        )
+
+    def _metrics(self, started: float) -> RunMetrics:
+        return RunMetrics(
+            wall_time_ms=int((time.monotonic() - started) * 1000),
+            llm_calls=0,
+            prompt_tokens=0,
+            completion_tokens=0,
+            estimated_cost_usd=0.0,
         )
 
     def validate_input(self, input: BaseModel) -> list[str]:
         if not isinstance(input, SkillCompilerInput):
-            return [f"Expected SkillCompilerInput, got {type(input).__name__}"]
+            return ["SkillCompiler expects SkillCompilerInput"]
         return []
 
     def can_degrade(self) -> bool:
-        return True  # Fallback compilation is a degraded response
+        return True

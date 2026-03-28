@@ -1,38 +1,89 @@
-"""Phase G executor: Quality gate validation."""
+"""Phase F executor: platform validation + content quality gate."""
 
 from __future__ import annotations
+
+from pathlib import Path
 
 from pydantic import BaseModel
 
 from doramagic_contracts.envelope import ModuleResultEnvelope
-from doramagic_contracts.executor import ExecutorConfig
-from doramagic_contracts.skill import ValidationInput
+from doramagic_contracts.skill import ValidationInput, ValidationReport
+from doramagic_skill_compiler.compiler import score_skill_quality
 
 
 class ValidatorExecutor:
-    """Wraps platform_openclaw.validator.run_validation() as a PhaseExecutor."""
+    async def execute(self, input: BaseModel, adapter: object, config) -> ModuleResultEnvelope[ValidationReport]:
+        if not isinstance(input, ValidationInput):
+            raise TypeError("ValidatorExecutor expects ValidationInput")
 
-    async def execute(
-        self, input: BaseModel, adapter: object, config: ExecutorConfig,
-    ) -> ModuleResultEnvelope:
         from doramagic_platform_openclaw.validator import run_validation
 
-        assert isinstance(input, ValidationInput)
         result = run_validation(input)
+        report = result.data or ValidationReport(status="BLOCKED", checks=[])
 
-        # Map ValidationReport.status to envelope status for controller
-        if result.data and result.data.status == "REVISE":
-            result.status = "degraded"  # signals controller to loop back
-        elif result.data and result.data.status == "BLOCKED":
+        skill_md = self._read_text(input.skill_bundle.skill_md_path)
+        quality = score_skill_quality(skill_md) if skill_md else {
+            "overall_score": 0.0,
+            "dimension_scores": {},
+            "weakest_dimension": "Coverage",
+            "weakest_section": "knowledge",
+            "repairable": False,
+            "repair_plan": [],
+            "blockers": ["missing_skill_md"],
+        }
+
+        has_blockers = report.status == "BLOCKED" or any(
+            not check.passed and check.severity == "blocking" for check in report.checks
+        )
+        repairable = bool(quality["repairable"]) and not has_blockers
+        if has_blockers:
+            status = "BLOCKED"
+            delivery_tier = "synthesis_pack"
+        elif quality["overall_score"] >= 60:
+            status = "PASS"
+            delivery_tier = "full_skill"
+        elif repairable:
+            status = "REVISE"
+            delivery_tier = "draft_skill"
+        else:
+            status = "BLOCKED"
+            delivery_tier = "draft_skill"
+
+        report.status = status
+        report.overall_score = quality["overall_score"]
+        report.dimension_scores = quality["dimension_scores"]
+        report.weakest_dimension = quality["weakest_dimension"]
+        report.weakest_section = quality["weakest_section"]
+        report.repairable = repairable
+        report.repair_plan = quality["repair_plan"][:2]
+        report.delivery_tier = delivery_tier
+        report.residual_risks = quality["blockers"]
+        report.revise_instructions = [
+            f"Repair section `{section}` to improve {quality['weakest_dimension']}"
+            for section in report.repair_plan
+        ]
+
+        result.data = report
+        if status == "REVISE":
+            result.status = "degraded"
+        elif status == "BLOCKED":
             result.status = "blocked"
-
+        else:
+            result.status = "ok"
         return result
 
+    def _read_text(self, path_str: str) -> str:
+        if not path_str:
+            return ""
+        path = Path(path_str).expanduser()
+        if not path.exists():
+            return ""
+        return path.read_text(encoding="utf-8", errors="replace")
+
     def validate_input(self, input: BaseModel) -> list[str]:
-        errors = []
         if not isinstance(input, ValidationInput):
-            errors.append(f"Expected ValidationInput, got {type(input).__name__}")
-        return errors
+            return ["ValidatorExecutor expects ValidationInput"]
+        return []
 
     def can_degrade(self) -> bool:
-        return True  # REVISE is a degraded response, not an error
+        return True

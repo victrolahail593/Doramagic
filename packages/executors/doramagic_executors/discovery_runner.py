@@ -1,9 +1,4 @@
-"""Phase B executor: Real GitHub search + candidate ranking + relevance gate.
-
-v9.0: Uses github_queries from NeedProfile when available (LLM-generated).
-      Adds relevance gate: filters out repos that don't match relevance_terms.
-      Honest reporting when no relevant projects found.
-"""
+"""Phase B executor: targeted or broad discovery based on routing decision."""
 
 from __future__ import annotations
 
@@ -12,263 +7,177 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
+from doramagic_contracts.base import DiscoveryCandidate
 from doramagic_community.github_search import search_github
-from doramagic_contracts.base import NeedProfile
-from doramagic_contracts.cross_project import (
-    DiscoveryCandidate,
-    DiscoveryInput,
-    DiscoveryResult,
-    SearchCoverageItem,
-)
-from doramagic_contracts.envelope import (
-    ErrorCodes,
-    ModuleResultEnvelope,
-    RunMetrics,
-    WarningItem,
-)
-from doramagic_contracts.executor import ExecutorConfig
+from doramagic_contracts.cross_project import DiscoveryInput, DiscoveryResult
+from doramagic_contracts.envelope import ErrorCodes, ModuleResultEnvelope, RunMetrics, WarningItem
 
 MIN_STARS = 30
 
 
 class DiscoveryRunner:
-    """Searches GitHub, ClawHub, and local skills for candidate projects.
-
-    Uses github_search.py (already proven in singleshot) for real GitHub API calls.
-    Falls back to mock run_discovery() if GitHub is unavailable.
-    """
-
     async def execute(
-        self, input: BaseModel, adapter: object, config: ExecutorConfig,
+        self, input: BaseModel, adapter: object, config
     ) -> ModuleResultEnvelope[DiscoveryResult]:
-        start = time.monotonic()
-        warnings: list[WarningItem] = []
-
+        started = time.monotonic()
         if not isinstance(input, DiscoveryInput):
-            return self._error("Expected DiscoveryInput", ErrorCodes.INPUT_INVALID, start)
+            return self._error("Expected DiscoveryInput", ErrorCodes.INPUT_INVALID, started)
 
         need = input.need_profile
+        routing = input.routing
+        warnings: list[WarningItem] = []
+        excluded = []
 
-        # v9.0: Prefer github_queries from LLM over raw keywords
-        if need.github_queries:
-            # Use first github_query's words for search
-            search_keywords = []
-            seen = set()
-            for q in need.github_queries:
-                for word in q.split():
-                    wl = word.lower()
-                    if wl not in seen and len(wl) >= 2:
-                        search_keywords.append(word)
-                        seen.add(wl)
-            keywords = search_keywords[:5]
+        if routing and routing.route == "NAMED_PROJECT":
+            candidates = self._targeted_search(routing.project_names, routing.max_repos)
+            search_evidence = [f"targeted:{name}" for name in routing.project_names]
         else:
-            keywords = need.keywords[:3]
+            queries = need.github_queries or need.relevance_terms or need.keywords[:3]
+            candidates = self._broad_search(queries, need.max_projects)
+            search_evidence = [f"broad:{query}" for query in queries[:3]]
 
-        if not keywords:
-            return self._error("No keywords for search", ErrorCodes.INPUT_INVALID, start)
+        filtered = []
+        relevance_terms = [term.lower() for term in (need.relevance_terms or need.keywords[:4])]
+        for candidate in candidates:
+            searchable = f"{candidate.name} {candidate.contribution}".lower()
+            if relevance_terms and not any(term in searchable for term in relevance_terms if term):
+                excluded.append(candidate)
+                continue
+            filtered.append(candidate)
 
-        # 1. Real GitHub search
-        github_candidates = self._search_github(keywords)
-
-        # 2. ClawHub search (optional)
-        clawhub_candidates = self._search_clawhub(keywords)
-
-        # 3. Local skills scan (optional)
-        local_candidates = self._scan_local_skills(keywords)
-
-        # Merge all candidates
-        all_candidates = github_candidates + clawhub_candidates + local_candidates
-
-        # v9.0: Relevance gate — filter out irrelevant GitHub candidates
-        if need.relevance_terms and github_candidates:
-            github_candidates = self._relevance_gate(github_candidates, need.relevance_terms)
-            if len(github_candidates) < len(all_candidates):
-                rejected_count = len(all_candidates) - len(github_candidates) - len(clawhub_candidates) - len(local_candidates)
-                if rejected_count > 0:
-                    warnings.append(WarningItem(
-                        code="W_IRRELEVANT_FILTERED",
-                        message=f"Filtered {rejected_count} irrelevant GitHub repo(s)",
-                    ))
-            all_candidates = github_candidates + clawhub_candidates + local_candidates
-
-        if not all_candidates:
-            return ModuleResultEnvelope(
-                module_name="DiscoveryRunner",
-                status="blocked",
-                error_code=ErrorCodes.NO_CANDIDATES,
-                warnings=[WarningItem(
-                    code="NO_RESULTS",
-                    message="No relevant candidates found for: " + " ".join(keywords)
-                    + ". Relevance filter active with terms: " + ", ".join(need.relevance_terms or []),
-                )],
-                data=DiscoveryResult(candidates=[], search_coverage=[
-                    SearchCoverageItem(direction=kw, status="missing") for kw in keywords
-                ]),
-                metrics=self._metrics(start),
-            )
-
-        # Select top candidates for extraction (max 3)
-        for i, c in enumerate(all_candidates[:3]):
-            c.selected_for_phase_c = True
+        for index, candidate in enumerate(filtered[: need.max_projects]):
+            candidate.selected_for_phase_c = True
+            candidate.why_selected = candidate.why_selected or ("top targeted match" if routing and routing.route == "NAMED_PROJECT" else "top domain match")
+            candidate.confidence = max(candidate.confidence, 0.9 if index == 0 else 0.72)
 
         result = DiscoveryResult(
-            candidates=all_candidates,
-            search_coverage=[
-                SearchCoverageItem(
-                    direction=kw,
-                    status="covered" if any(kw.lower() in (c.name + c.contribution).lower() for c in all_candidates) else "partial",
-                ) for kw in keywords
-            ],
+            candidates=filtered[: need.max_projects],
+            excluded_candidates=excluded[:5],
+            search_coverage=[],
+            search_evidence=search_evidence,
+            candidate_count=len(filtered[: need.max_projects]),
+            no_candidate_reason="" if filtered else "no relevant repositories found",
         )
 
-        elapsed = int((time.monotonic() - start) * 1000)
-        status = "ok" if github_candidates else "degraded"
-        if not github_candidates:
-            warnings.append(WarningItem(code="W_NO_GITHUB", message="GitHub search returned no results, using ClawHub/local only"))
+        status = "ok" if result.candidate_count > 0 else "blocked"
+        if excluded:
+            warnings.append(
+                WarningItem(
+                    code="W_FILTERED",
+                    message=f"Filtered {len(excluded)} candidate(s) by relevance gate",
+                )
+            )
+        if status == "blocked":
+            warnings.append(WarningItem(code="NO_RESULTS", message="Discovery found no relevant candidates"))
 
         return ModuleResultEnvelope(
             module_name="DiscoveryRunner",
             status=status,
+            error_code=ErrorCodes.NO_CANDIDATES if status == "blocked" else None,
             warnings=warnings,
             data=result,
-            metrics=self._metrics(start),
+            metrics=RunMetrics(
+                wall_time_ms=int((time.monotonic() - started) * 1000),
+                llm_calls=0,
+                prompt_tokens=0,
+                completion_tokens=0,
+                estimated_cost_usd=0.0,
+            ),
         )
 
-    def _relevance_gate(
-        self, candidates: list[DiscoveryCandidate], relevance_terms: list[str],
-    ) -> list[DiscoveryCandidate]:
-        """Filter candidates by relevance to user intent.
-
-        A candidate is relevant if its name or contribution (description) mentions
-        at least 1 relevance term. This prevents extracting knowledge from
-        completely unrelated projects (e.g., VPN scripts for "WiFi密码管理").
-        """
-        terms_lower = [t.lower() for t in relevance_terms]
-        relevant = []
-        for c in candidates:
-            searchable = f"{c.name} {c.contribution}".lower()
-            if any(t in searchable for t in terms_lower):
-                relevant.append(c)
-        return relevant
-
-    def _search_github(self, keywords: list[str]) -> list[DiscoveryCandidate]:
-        """Real GitHub API search via doramagic_community.github_search."""
-        try:
-            raw = search_github(keywords, top_k=6)
-            candidates = []
-            for i, r in enumerate(raw):
-                stars = r.get("stars", 0)
+    def _targeted_search(self, names: list[str], limit: int) -> list:
+        candidates = []
+        for index, name in enumerate(names[:3]):
+            results = search_github([name], top_k=4)
+            for rank, repo in enumerate(results):
+                stars = repo.get("stars", 0)
                 if stars < MIN_STARS:
                     continue
-                candidates.append(DiscoveryCandidate(
-                    candidate_id=f"gh-{i:03d}-{r['name'].replace('/', '-')}",
-                    name=r["name"],
-                    url=r["url"],
-                    type="github_repo",
-                    relevance="high" if i < 2 else "medium",
-                    contribution=r.get("description", "")[:200],
-                    quick_score=min(10, int(stars ** 0.3)),  # log-scale score
-                    quality_signals={
-                        "stars": stars,
-                        "language": r.get("language", ""),
-                        "updated_at": r.get("updated_at", ""),
-                    },
-                    selected_for_phase_c=False,
-                    selected_for_phase_d=False,
-                ))
-            return candidates
-        except Exception as e:
-            return []  # Graceful degradation
+                full_name = repo.get("name", "")
+                score_bonus = 2 if name.lower() in full_name.lower() else 0
+                candidates.append(
+                    self._candidate(
+                        repo,
+                        candidate_id=f"gh-target-{index}-{rank}",
+                        why_selected=f"matched named project `{name}`",
+                        confidence=0.92 if score_bonus else 0.74,
+                    )
+                )
+            if candidates:
+                break
+        return candidates[:limit]
 
-    def _search_clawhub(self, keywords: list[str]) -> list[DiscoveryCandidate]:
-        """Search ClawHub skill registry."""
-        try:
-            import json
-            import urllib.request
-            import urllib.parse
-
-            query = " ".join(keywords[:3])
-            url = f"https://clawhub.ai/api/search?q={urllib.parse.quote(query)}&limit=5"
-            req = urllib.request.Request(url, headers={"User-Agent": "Doramagic/1.0"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode())
-
-            candidates = []
-            for i, s in enumerate(data.get("results", data.get("skills", []))[:3]):
-                candidates.append(DiscoveryCandidate(
-                    candidate_id=f"clawhub-{s.get('slug', s.get('id', i))}",
-                    name=s.get("displayName", s.get("name", "")),
-                    url=f"clawhub:{s.get('slug', '')}",
-                    type="community_skill",
-                    relevance="medium",
-                    contribution=s.get("summary", s.get("description", ""))[:200],
-                    quick_score=min(10, int(s.get("score", 5))),
-                    quality_signals={},
-                    selected_for_phase_c=False,
-                    selected_for_phase_d=True,
-                ))
-            return candidates
-        except Exception:
-            return []
-
-    def _scan_local_skills(self, keywords: list[str]) -> list[DiscoveryCandidate]:
-        """Scan locally installed OpenClaw skills."""
-        skills_dir = Path.home() / ".openclaw" / "skills"
-        if not skills_dir.exists():
-            return []
-
-        candidates = []
-        try:
-            for skill_dir in skills_dir.iterdir():
-                if not skill_dir.is_dir():
+    def _broad_search(self, queries: list[str], limit: int) -> list:
+        merged = []
+        seen = set()
+        for query in queries[:3]:
+            try:
+                results = search_github([query], top_k=max(4, limit))
+            except Exception:  # noqa: BLE001
+                continue
+            for repo in results:
+                full_name = repo.get("name", "")
+                if not full_name or full_name in seen or repo.get("stars", 0) < MIN_STARS:
                     continue
-                skill_md = skill_dir / "SKILL.md"
-                if not skill_md.exists():
-                    continue
+                seen.add(full_name)
+                merged.append(
+                    self._candidate(
+                        repo,
+                        candidate_id=f"gh-broad-{len(merged)}",
+                        why_selected=f"broad exploration hit for `{query}`",
+                        confidence=0.7,
+                    )
+                )
+        return merged[:limit]
 
-                content = skill_md.read_text(encoding="utf-8", errors="replace")[:2000]
-                # Score by keyword match
-                score = sum(1 for kw in keywords if kw.lower() in content.lower())
-                if score == 0:
-                    continue
+    def _candidate(self, repo: dict, *, candidate_id: str, why_selected: str, confidence: float):
+        full_name = repo.get("name", "")
+        repo_type_hint = "CATALOG" if full_name.lower().startswith("awesome-") else None
+        extraction_profile = "shallow" if repo_type_hint == "CATALOG" else "deep"
+        return DiscoveryCandidate(
+            candidate_id=candidate_id,
+            name=full_name,
+            url=repo.get("url", ""),
+            type="github_repo",
+            relevance="high",
+            contribution=repo.get("description", "")[:220],
+            quick_score=min(10.0, max(1.0, repo.get("stars", 0) ** 0.3)),
+            quality_signals={
+                "stars": repo.get("stars", 0),
+                "forks": repo.get("forks", 0),
+                "last_updated": repo.get("updated_at", ""),
+                "has_readme": True,
+                "license": repo.get("license"),
+            },
+            source="github",
+            confidence=confidence,
+            why_selected=why_selected,
+            repo_type_hint=repo_type_hint,
+            extraction_profile=extraction_profile,
+            selected_for_phase_c=False,
+            selected_for_phase_d=False,
+        )
 
-                candidates.append(DiscoveryCandidate(
-                    candidate_id=f"local-{skill_dir.name}",
-                    name=skill_dir.name,
-                    url=f"local:{skill_dir}",
-                    type="community_skill",
-                    relevance="low",
-                    contribution=content[:200],
-                    quick_score=min(10, score * 3),
-                    quality_signals={"local": True},
-                    selected_for_phase_c=False,
-                    selected_for_phase_d=True,
-                ))
-        except Exception:
-            pass
-
-        return sorted(candidates, key=lambda c: c.quick_score, reverse=True)[:3]
-
-    def _error(self, msg: str, code: str, start: float) -> ModuleResultEnvelope:
+    def _error(self, message: str, code: str, started: float) -> ModuleResultEnvelope[DiscoveryResult]:
         return ModuleResultEnvelope(
             module_name="DiscoveryRunner",
             status="error",
             error_code=code,
-            warnings=[WarningItem(code=code, message=msg)],
-            metrics=self._metrics(start),
-        )
-
-    def _metrics(self, start: float) -> RunMetrics:
-        return RunMetrics(
-            wall_time_ms=int((time.monotonic() - start) * 1000),
-            llm_calls=0, prompt_tokens=0, completion_tokens=0,
-            estimated_cost_usd=0.0,
+            warnings=[WarningItem(code=code, message=message)],
+            data=None,
+            metrics=RunMetrics(
+                wall_time_ms=int((time.monotonic() - started) * 1000),
+                llm_calls=0,
+                prompt_tokens=0,
+                completion_tokens=0,
+                estimated_cost_usd=0.0,
+            ),
         )
 
     def validate_input(self, input: BaseModel) -> list[str]:
         if not isinstance(input, DiscoveryInput):
-            return [f"Expected DiscoveryInput, got {type(input).__name__}"]
+            return ["DiscoveryRunner expects DiscoveryInput"]
         return []
 
     def can_degrade(self) -> bool:
-        return True  # Can degrade to ClawHub/local only
+        return True

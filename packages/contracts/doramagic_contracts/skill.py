@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional, Literal
+from typing import Any, Optional, Literal
 
 from pydantic import BaseModel
 
@@ -39,6 +39,9 @@ class SkillCompilerInput(BaseModel):
     need_profile: NeedProfile
     synthesis_report: SynthesisReportData
     platform_rules: PlatformRules
+    target_sections: list[str] = []
+    accumulated_knowledge: list[dict[str, Any]] = []
+    existing_sections: dict[str, str] = {}
 
 
 class SkillBuildManifest(BaseModel):
@@ -59,6 +62,16 @@ class SkillCompilerOutput(BaseModel):
     readme_md_path: str
 
 
+class CompileBundleContract(BaseModel):
+    schema_version: str = "dm.compile-bundle-contract.v1"
+    section_drafts: dict[str, str]
+    full_draft: str
+    provenance_map: dict[str, list[str]] = {}
+    coverage_holes: list[str] = []
+    predicted_weak_spots: list[str] = []
+    artifact_paths: dict[str, str] = {}
+
+
 # --- Validator ---
 
 
@@ -75,6 +88,7 @@ class ValidationInput(BaseModel):
     synthesis_report: SynthesisReportData
     skill_bundle: SkillBundlePaths
     platform_rules: PlatformRules
+    compile_bundle: Optional[CompileBundleContract] = None
 
 
 class ValidationCheck(BaseModel):
@@ -97,3 +111,19 @@ class ValidationReport(BaseModel):
     status: Literal["PASS", "REVISE", "BLOCKED"]
     checks: list[ValidationCheck]
     revise_instructions: list[str] = []
+    overall_score: float = 0.0
+    dimension_scores: dict[str, float] = {}
+    weakest_dimension: Optional[str] = None
+    weakest_section: Optional[str] = None
+    repairable: bool = False
+    repair_plan: list[str] = []
+    delivery_tier: str = "full_skill"
+    residual_risks: list[str] = []
+
+
+class DeliveryManifest(BaseModel):
+    schema_version: str = "dm.delivery-manifest.v1"
+    delivery_tier: str
+    artifact_paths: dict[str, str]
+    run_summary: dict[str, Any]
+    user_message: str

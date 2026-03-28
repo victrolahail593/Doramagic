@@ -1,140 +1,135 @@
-"""Phase E executor: Cross-project knowledge synthesis with fallback.
-
-If run_synthesis() returns empty results (no signals), falls back to
-best-single-soul synthesis (replicating singleshot's fallback logic).
-"""
+"""Phase D executor: synthesize worker envelopes into compile-ready bundles."""
 
 from __future__ import annotations
 
-import os
 import time
 
 from pydantic import BaseModel
 
-from doramagic_contracts.cross_project import (
-    SynthesisDecision,
-    SynthesisInput,
-    SynthesisReportData,
-)
+from doramagic_contracts.cross_project import SynthesisDecision, SynthesisInput, SynthesisReportData
 from doramagic_contracts.envelope import ModuleResultEnvelope, RunMetrics, WarningItem
-from doramagic_contracts.executor import ExecutorConfig
 
 
 class SynthesisRunner:
-    """Wraps cross_project.synthesis.run_synthesis() with fallback.
-
-    If formal synthesis produces empty results (no CompareSignals),
-    falls back to best-single-soul extraction — picks the soul with
-    the most findings and promotes its knowledge as consensus.
-    """
-
-    async def execute(
-        self, input: BaseModel, adapter: object, config: ExecutorConfig,
-    ) -> ModuleResultEnvelope:
-        start = time.monotonic()
-
+    async def execute(self, input: BaseModel, adapter: object, config) -> ModuleResultEnvelope[SynthesisReportData]:
+        started = time.monotonic()
         if not isinstance(input, SynthesisInput):
             return ModuleResultEnvelope(
                 module_name="SynthesisRunner",
-                status="error", error_code="E_INPUT_INVALID",
+                status="error",
+                error_code="E_INPUT_INVALID",
                 warnings=[WarningItem(code="TYPE", message="Expected SynthesisInput")],
-                metrics=self._metrics(start),
+                data=None,
+                metrics=self._metrics(started),
             )
 
-        os.environ["DORAMAGIC_SYNTHESIS_OUTPUT_DIR"] = str(config.run_dir / "staging")
+        aggregate = input.extraction_aggregate.model_dump() if hasattr(input.extraction_aggregate, "model_dump") else input.extraction_aggregate or {}
+        envelopes = aggregate.get("repo_envelopes", [])
+        decisions = []
+        provenance = {}
+        divergences = []
+        for index, envelope in enumerate(envelopes):
+            if not isinstance(envelope, dict) or envelope.get("status") == "failed":
+                continue
+            repo_name = envelope.get("repo_name", f"repo-{index}")
+            design_philosophy = envelope.get("design_philosophy") or "[NO_DATA]"
+            mental_model = envelope.get("mental_model") or "[NO_DATA]"
+            why_items = envelope.get("why_hypotheses", [])[:3] or [design_philosophy]
+            trap_items = envelope.get("anti_patterns", [])[:3]
 
-        # Try formal synthesis
-        from doramagic_cross_project.synthesis import run_synthesis
-        result = run_synthesis(input)
-
-        # Check if result has meaningful content
-        has_content = False
-        if result.data:
-            has_content = bool(
-                result.data.consensus
-                or result.data.unique_knowledge
-                or result.data.selected_knowledge
+            decisions.append(
+                SynthesisDecision(
+                    decision_id=f"why-{index:03d}",
+                    statement=design_philosophy,
+                    decision="include",
+                    rationale=mental_model,
+                    source_refs=[envelope.get("repo_url", "")],
+                    demand_fit="high",
+                )
             )
+            for sub_index, item in enumerate(why_items[:2]):
+                decisions.append(
+                    SynthesisDecision(
+                        decision_id=f"why-{index:03d}-{sub_index:02d}",
+                        statement=item,
+                        decision="include",
+                        rationale=f"Derived from {repo_name}",
+                        source_refs=[envelope.get("repo_url", "")],
+                        demand_fit="medium",
+                    )
+                )
+            for sub_index, trap in enumerate(trap_items[:2]):
+                divergences.append(f"{repo_name}: {trap}")
+                decisions.append(
+                    SynthesisDecision(
+                        decision_id=f"trap-{index:03d}-{sub_index:02d}",
+                        statement=f"[TRAP] {trap}",
+                        decision="include",
+                        rationale=f"Observed risk from {repo_name}",
+                        source_refs=[envelope.get("repo_url", "")],
+                        demand_fit="high",
+                    )
+                )
+            provenance[repo_name] = [envelope.get("repo_url", "")]
 
-        if has_content:
-            return result
+        # Mark repos where all key fields are placeholder as partial
+        for index2, envelope2 in enumerate(envelopes):
+            if not isinstance(envelope2, dict) or envelope2.get("status") == "failed":
+                continue
+            dp2 = envelope2.get("design_philosophy") or "[NO_DATA]"
+            mm2 = envelope2.get("mental_model") or "[NO_DATA]"
+            if dp2 == "[NO_DATA]" and mm2 == "[NO_DATA]" and not envelope2.get("why_hypotheses"):
+                envelope2["_synthesis_status"] = "partial"
 
-        # Fallback: best-single-soul synthesis
-        warnings = list(result.warnings) if result.warnings else []
-        warnings.append(WarningItem(
-            code="W_FALLBACK_SYNTHESIS",
-            message="Formal synthesis empty, using best-soul fallback",
-        ))
+        compile_brief = {
+            "role": [input.need_profile.intent],
+            "knowledge": [decision.statement for decision in decisions if "[TRAP]" not in decision.statement][:8],
+            "workflow": [f"Start from {input.need_profile.intent}", "Apply extracted WHY before generic advice"],
+            "anti_patterns": [decision.statement for decision in decisions if "[TRAP]" in decision.statement][:6],
+        }
 
-        fallback_data = self._fallback_synthesis(input)
+        report = SynthesisReportData(
+            consensus=decisions[:8],
+            conflicts=[],
+            unique_knowledge=decisions[8:12],
+            selected_knowledge=decisions,
+            excluded_knowledge=[],
+            open_questions=[] if decisions else ["No synthesis decisions generated."],
+            global_theses=[decision.statement for decision in decisions[:5]],
+            common_why=[decision.statement for decision in decisions if "[TRAP]" not in decision.statement][:6],
+            divergences=divergences[:6],
+            source_provenance_matrix=provenance,
+            unknowns=[],
+            compile_ready=len(decisions) >= 2,
+            compile_brief_by_section=compile_brief,
+        )
+
+        status = "ok" if report.compile_ready else "blocked"
+        warnings = []
+        if not report.compile_ready:
+            warnings.append(WarningItem(code="COMPILE_NOT_READY", message="Synthesis did not produce enough concrete knowledge"))
 
         return ModuleResultEnvelope(
             module_name="SynthesisRunner",
-            status="degraded",
+            status=status,
             warnings=warnings,
-            data=fallback_data,
-            metrics=self._metrics(start),
+            data=report,
+            metrics=self._metrics(started),
         )
 
-    def _fallback_synthesis(self, input: SynthesisInput) -> SynthesisReportData:
-        """Best-single-soul fallback: promote the richest soul's knowledge.
-
-        Replicates singleshot lines 613-635: if LLM synthesis fails,
-        use the soul with the most why_decisions as the entire synthesis.
-        """
-        # Find the richest project summary
-        best_summary = None
-        best_score = 0
-        for ps in input.project_summaries:
-            score = len(ps.top_capabilities) + len(ps.top_failures)
-            if score > best_score:
-                best_score = score
-                best_summary = ps
-
-        consensus = []
-        if best_summary:
-            # Promote capabilities as consensus decisions
-            for i, cap in enumerate(best_summary.top_capabilities[:5]):
-                consensus.append(SynthesisDecision(
-                    decision_id=f"fallback-{i:03d}",
-                    statement=cap if isinstance(cap, str) else str(cap),
-                    decision="adopt",
-                    rationale=f"From best available source: {best_summary.project_id}",
-                    source_refs=[],
-                    demand_fit="high",
-                ))
-
-            # Promote failures as additional knowledge
-            for i, fail in enumerate(best_summary.top_failures[:3]):
-                consensus.append(SynthesisDecision(
-                    decision_id=f"fallback-trap-{i:03d}",
-                    statement=f"[TRAP] {fail}" if isinstance(fail, str) else str(fail),
-                    decision="warn",
-                    rationale=f"Community-reported issue from {best_summary.project_id}",
-                    source_refs=[],
-                    demand_fit="high",
-                ))
-
-        return SynthesisReportData(
-            consensus=consensus,
-            conflicts=[],
-            unique_knowledge=[],
-            selected_knowledge=consensus,  # All fallback knowledge is selected
-            excluded_knowledge=[],
-            open_questions=["Formal cross-project synthesis was empty; this is a single-source fallback."],
-        )
-
-    def _metrics(self, start: float) -> RunMetrics:
+    def _metrics(self, started: float) -> RunMetrics:
         return RunMetrics(
-            wall_time_ms=int((time.monotonic() - start) * 1000),
-            llm_calls=0, prompt_tokens=0, completion_tokens=0,
+            wall_time_ms=int((time.monotonic() - started) * 1000),
+            llm_calls=0,
+            prompt_tokens=0,
+            completion_tokens=0,
             estimated_cost_usd=0.0,
         )
 
     def validate_input(self, input: BaseModel) -> list[str]:
         if not isinstance(input, SynthesisInput):
-            return [f"Expected SynthesisInput, got {type(input).__name__}"]
+            return ["SynthesisRunner expects SynthesisInput"]
         return []
 
     def can_degrade(self) -> bool:
-        return True  # Fallback synthesis is a degraded response
+        return True

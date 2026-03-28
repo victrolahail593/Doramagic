@@ -1,255 +1,201 @@
-"""Phase A executor: Parse user input into a NeedProfile.
-
-v9.0: LLM-powered keyword generation (primary) + improved heuristic fallback.
-Signals CLARIFY when input is too ambiguous to parse.
-"""
+"""Phase A executor: build a NeedProfile with confidence and clarification hints."""
 
 from __future__ import annotations
 
 import json
 import re
 import time
+from typing import Any
 
 from pydantic import BaseModel
 
 from doramagic_contracts.base import NeedProfile, SearchDirection
 from doramagic_contracts.envelope import ErrorCodes, ModuleResultEnvelope, RunMetrics, WarningItem
 from doramagic_contracts.executor import ExecutorConfig
+from doramagic_shared_utils.llm_adapter import LLMMessage
 
-# LLM system prompt for keyword generation
-_NEED_PROFILE_SYSTEM = """You generate GitHub search queries from user requests. The user wants to find open-source projects to learn from.
+_SYSTEM = """You normalize Doramagic user input into a JSON profile.
 
-Output valid JSON only, no other text. Schema:
+Return JSON only with:
 {
-  "domain": "software domain in English (e.g., 'password management', 'fitness tracking')",
-  "intent_en": "what the user wants, translated to English (1 sentence)",
-  "github_queries": ["query1", "query2", "query3"],
-  "relevance_terms": ["term1", "term2", "term3", "term4", "term5"]
+  "domain": "english domain label",
+  "intent_en": "1 sentence",
+  "github_queries": ["query 1", "query 2", "query 3"],
+  "relevance_terms": ["term1", "term2", "term3", "term4"],
+  "confidence": 0.0,
+  "questions": ["clarifying question 1", "clarifying question 2"]
 }
+"""
 
-Rules:
-- github_queries: 3 different search strings (2-4 words each) optimized for GitHub search API.
-  Think about what developers actually NAME their repos and write in descriptions.
-- relevance_terms: 5 English keywords that a RELEVANT repo would mention in its README or description.
-- domain: the software domain, NOT a generic label. Be specific.
-- intent_en: precise translation of the user's goal."""
-
-# Improved fallback mapping: each CN term → list of compound search terms
-_CN_TO_EN: dict[str, list[str]] = {
-    "记账": ["expense tracker", "personal finance", "bookkeeping"],
-    "菜谱": ["recipe manager", "cookbook app", "meal planner"],
-    "日记": ["journal app", "diary", "note taking"],
-    "翻译": ["translation tool", "translator", "i18n"],
-    "天气": ["weather app", "forecast", "weather API"],
-    "健身": ["fitness tracker", "workout app", "exercise"],
-    "阅读": ["reading app", "book reader", "ebook"],
-    "音乐": ["music player", "audio streaming", "playlist"],
-    "照片": ["photo gallery", "image manager", "photo editor"],
-    "视频": ["video player", "streaming app", "media player"],
-    "购物": ["shopping app", "e-commerce", "price comparison"],
-    "社交": ["social network", "chat app", "messaging"],
-    "地图": ["map navigation", "location service", "GPS tracker"],
-    "日历": ["calendar app", "schedule planner", "task manager"],
-    "密码": ["password manager", "credential manager", "security vault"],
-    "备份": ["backup tool", "file sync", "cloud storage"],
-    "下载": ["download manager", "downloader", "torrent client"],
-    "管理": ["management tool", "admin dashboard", "organizer"],
-    "监控": ["monitoring tool", "alerting system", "observability"],
-    "自动化": ["automation workflow", "task automation", "pipeline"],
-    "家居": ["smart home", "home automation", "IoT"],
-    "笔记": ["note taking", "knowledge base", "markdown editor"],
-    "AI": ["AI tool", "machine learning", "LLM application"],
-    "数据": ["data analytics", "data visualization", "dashboard"],
+_CN_HINTS: dict[str, tuple[list[str], str]] = {
+    "记账": (["expense tracker", "personal finance", "bookkeeping"], "personal finance"),
+    "菜谱": (["recipe manager", "cookbook app", "meal planner"], "recipe management"),
+    "密码": (["password manager", "credential vault", "secret storage"], "password management"),
+    "wifi": (["wifi manager", "network credential", "wireless config"], "wifi tooling"),
+    "阅读": (["reading tracker", "book notes", "library app"], "reading workflow"),
 }
-
-_STOPWORDS = {"的", "了", "是", "在", "我", "要", "做", "一个", "帮我", "帮", "app", "skill", "工具", "一下"}
+_STOPWORDS = {"帮我", "做", "一个", "工具", "app", "skill", "系统", "东西"}
+_URL_PATTERN = re.compile(r"https?://(?:github|gitlab|gitee)\.com/[\w.-]+/[\w.-]+/?")
+_SLUG_PATTERN = re.compile(r"\b[\w.-]+/[\w.-]+\b")
 
 
 class NeedProfileBuilder:
-    """Builds a NeedProfile from raw user input.
-
-    Primary: LLM mode via adapter (generates domain-specific GitHub search keywords).
-    Fallback: improved CN→EN keyword extraction (always available).
-    """
-
     async def execute(
-        self, input: BaseModel, adapter: object, config: ExecutorConfig,
+        self, input: BaseModel, adapter: object, config: ExecutorConfig
     ) -> ModuleResultEnvelope[NeedProfile]:
-        start = time.monotonic()
+        started = time.monotonic()
         raw = input.raw_input if hasattr(input, "raw_input") else str(input)
-
-        # Strip /dora prefix
-        raw = re.sub(r"^/?dora\s*", "", raw).strip()
-
+        raw = re.sub(r"^/?dora(?:-status)?\s*", "", raw, flags=re.IGNORECASE).strip()
         if not raw:
-            return self._error_result(ErrorCodes.INPUT_INVALID, "Empty input", start)
+            return self._error(ErrorCodes.INPUT_INVALID, "Empty input", started)
 
-        # Try LLM-powered keyword generation if adapter supports it
-        llm_calls = 0
-        prompt_tokens = 0
-        completion_tokens = 0
-        profile = None
-
-        if hasattr(adapter, "call_json") or hasattr(adapter, "call"):
+        profile: NeedProfile | None = None
+        if adapter is not None:
             try:
-                profile, llm_calls, prompt_tokens, completion_tokens = await self._build_llm(raw, adapter)
-            except Exception:
-                pass  # Fall through to heuristic
-
+                profile = await self._build_with_llm(raw, adapter)
+            except Exception:  # noqa: BLE001
+                profile = None
         if profile is None:
             profile = self._build_heuristic(raw)
 
-        # Check if we have enough signal
-        if len(profile.keywords) < 2 and len(profile.search_directions) < 1:
-            elapsed = int((time.monotonic() - start) * 1000)
-            return ModuleResultEnvelope(
-                module_name="NeedProfileBuilder",
-                status="degraded",
-                warnings=[WarningItem(
+        status = "ok" if profile.confidence >= 0.7 else "degraded"
+        warnings = []
+        if status == "degraded":
+            warnings.append(
+                WarningItem(
                     code="CLARIFY",
-                    message="CLARIFY:您能具体描述一下想要什么功能吗？比如「帮我做一个管理家庭菜谱的工具」",
-                )],
-                data=profile,
-                metrics=RunMetrics(
-                    wall_time_ms=elapsed, llm_calls=llm_calls,
-                    prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
-                    estimated_cost_usd=0.0,
-                ),
+                    message="CLARIFY:" + (profile.questions[0] if profile.questions else "你想分析具体项目，还是先找这个领域的最佳开源项目？"),
+                )
             )
 
-        elapsed = int((time.monotonic() - start) * 1000)
         return ModuleResultEnvelope(
             module_name="NeedProfileBuilder",
-            status="ok",
+            status=status,
+            warnings=warnings,
             data=profile,
             metrics=RunMetrics(
-                wall_time_ms=elapsed, llm_calls=llm_calls,
-                prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+                wall_time_ms=int((time.monotonic() - started) * 1000),
+                llm_calls=1 if adapter is not None else 0,
+                prompt_tokens=0,
+                completion_tokens=0,
                 estimated_cost_usd=0.0,
             ),
         )
 
-    async def _build_llm(
-        self, raw: str, adapter: object,
-    ) -> tuple[NeedProfile, int, int, int]:
-        """Use LLM to generate search keywords. Returns (profile, calls, prompt_tok, comp_tok)."""
-        if hasattr(adapter, "call_json"):
-            result = await adapter.call_json(_NEED_PROFILE_SYSTEM, raw, max_tokens=500)
-        else:
-            text = await adapter.call(_NEED_PROFILE_SYSTEM, raw, max_tokens=500)
-            # Parse JSON from response
-            if "```json" in text:
-                text = text.split("```json", 1)[1].split("```", 1)[0]
-            elif "```" in text:
-                text = text.split("```", 1)[1].split("```", 1)[0]
-            result = json.loads(text.strip())
-
-        domain = result.get("domain", "general")
-        intent_en = result.get("intent_en", raw)
-        github_queries = result.get("github_queries", [])
-        relevance_terms = result.get("relevance_terms", [])
-
-        # Build keywords from github_queries
+    async def _build_with_llm(self, raw: str, adapter: object) -> NeedProfile:
+        messages = [
+            LLMMessage(role="system", content=_SYSTEM),
+            LLMMessage(role="user", content=raw),
+        ]
+        if not hasattr(adapter, "generate"):
+            raise RuntimeError("adapter has no generate()")
+        response = await adapter.generate(getattr(adapter, "_default_model", "default"), messages)
+        payload = json.loads(response.content.strip())
         keywords = []
-        seen: set[str] = set()
-        for q in github_queries:
-            for word in q.split():
-                wl = word.lower()
-                if wl not in seen and len(wl) >= 2:
-                    keywords.append(word)
-                    seen.add(wl)
+        seen = set()
+        for query in payload.get("github_queries", []):
+            for word in query.split():
+                lowered = word.lower()
+                if lowered not in seen and len(lowered) >= 2:
+                    keywords.append(lowered)
+                    seen.add(lowered)
+        return NeedProfile(
+            raw_input=raw,
+            keywords=keywords[:8] or self._fallback_keywords(raw),
+            intent=raw,
+            intent_en=payload.get("intent_en", raw),
+            domain=payload.get("domain", "general"),
+            search_directions=[
+                SearchDirection(direction=query, priority="high" if index < 2 else "medium")
+                for index, query in enumerate(payload.get("github_queries", [])[:5])
+            ],
+            constraints=["openclaw_compatible"],
+            quality_expectations={},
+            github_queries=payload.get("github_queries", [])[:3],
+            relevance_terms=payload.get("relevance_terms", [])[:5],
+            confidence=float(payload.get("confidence", 0.75)),
+            questions=payload.get("questions", [])[:2],
+            max_projects=3,
+        )
 
-        # Build search directions
-        directions = []
-        for i, q in enumerate(github_queries[:5]):
-            directions.append(SearchDirection(
-                direction=q,
-                priority="high" if i < 2 else "medium",
-            ))
+    def _build_heuristic(self, raw: str) -> NeedProfile:
+        lowered = raw.lower()
+        keywords = self._fallback_keywords(raw)
+        matched_domains = []
+        for term, (_, domain) in _CN_HINTS.items():
+            if term in lowered or term in raw:
+                matched_domains.append(domain)
+        has_url = bool(_URL_PATTERN.search(raw))
+        has_slug = bool(_SLUG_PATTERN.search(raw))
+        confidence = 0.85 if has_url or has_slug else 0.78 if len(keywords) >= 3 else 0.58
+        questions: list[str] = []
+        if confidence < 0.7:
+            questions = [
+                "你是想让我直接分析某个现有项目，还是先帮你找这个领域里最值得参考的开源项目？",
+                "如果有目标项目，请直接给 GitHub URL 或项目名。",
+            ]
 
+        domain = matched_domains[0] if matched_domains else ("named project" if has_slug else "general")
+        github_queries = keywords[:3]
         return NeedProfile(
             raw_input=raw,
             keywords=keywords[:8],
             intent=raw,
-            intent_en=intent_en,
+            intent_en=raw,
             domain=domain,
-            search_directions=directions,
+            search_directions=[
+                SearchDirection(direction=direction, priority="high" if index < 2 else "medium")
+                for index, direction in enumerate(github_queries[:5])
+            ],
             constraints=["openclaw_compatible"],
             quality_expectations={},
             github_queries=github_queries[:3],
-            relevance_terms=relevance_terms,
-        ), 1, 0, 0  # Token counts not available from adapter
-
-    def _build_heuristic(self, raw: str) -> NeedProfile:
-        """Improved heuristic: CN→EN compound terms, no garbage padding."""
-        keywords: list[str] = []
-        seen: set[str] = set()
-
-        # Match CN→EN keywords (now compound terms like "password manager")
-        for cn, en_list in _CN_TO_EN.items():
-            if cn in raw:
-                for en in en_list:
-                    if en.lower() not in seen:
-                        keywords.append(en)
-                        seen.add(en.lower())
-
-        # Extract English words from input (3+ chars)
-        en_words = re.findall(r"[a-zA-Z]{3,}", raw)
-        for w in en_words:
-            wl = w.lower()
-            if wl not in seen and wl not in _STOPWORDS:
-                keywords.append(wl)
-                seen.add(wl)
-
-        # Extract Chinese tokens (2+ chars, not stopwords, not in dict)
-        cn_tokens = re.findall(r"[\u4e00-\u9fff]{2,}", raw)
-        for t in cn_tokens:
-            if t not in _STOPWORDS and t not in _CN_TO_EN and t not in seen:
-                keywords.append(t)
-                seen.add(t)
-
-        # Only pad if truly empty (no more "open source tool" garbage)
-        if not keywords:
-            keywords = ["open source tool"]
-
-        # Build search directions from compound keywords
-        directions = []
-        for i, kw in enumerate(keywords[:5]):
-            directions.append(SearchDirection(
-                direction=kw,
-                priority="high" if i < 2 else "medium",
-            ))
-
-        return NeedProfile(
-            raw_input=raw,
-            keywords=keywords[:8],
-            intent=raw,
-            search_directions=directions,
-            constraints=["openclaw_compatible"],
-            quality_expectations={},
+            relevance_terms=keywords[:5],
+            confidence=confidence,
+            questions=questions,
+            max_projects=1 if has_url else 3,
         )
 
-    def _error_result(
-        self, code: str, msg: str, start: float
-    ) -> ModuleResultEnvelope[NeedProfile]:
-        elapsed = int((time.monotonic() - start) * 1000)
+    def _fallback_keywords(self, raw: str) -> list[str]:
+        keywords: list[str] = []
+        seen = set()
+        lowered = raw.lower()
+        for needle, (translations, _) in _CN_HINTS.items():
+            if needle in raw or needle in lowered:
+                for item in translations:
+                    if item not in seen:
+                        keywords.append(item)
+                        seen.add(item)
+        for token in re.findall(r"[a-zA-Z][a-zA-Z0-9_-]{2,}", lowered):
+            if token not in seen and token not in _STOPWORDS:
+                keywords.append(token)
+                seen.add(token)
+        for token in re.findall(r"[\u4e00-\u9fff]{2,}", raw):
+            if token not in seen and token not in _STOPWORDS:
+                keywords.append(token)
+                seen.add(token)
+        return keywords or ["open source tool"]
+
+    def _error(self, code: str, message: str, started: float) -> ModuleResultEnvelope[NeedProfile]:
         return ModuleResultEnvelope(
             module_name="NeedProfileBuilder",
             status="error",
             error_code=code,
-            warnings=[WarningItem(code=code, message=msg)],
+            warnings=[WarningItem(code=code, message=message)],
             data=None,
             metrics=RunMetrics(
-                wall_time_ms=elapsed, llm_calls=0,
-                prompt_tokens=0, completion_tokens=0,
+                wall_time_ms=int((time.monotonic() - started) * 1000),
+                llm_calls=0,
+                prompt_tokens=0,
+                completion_tokens=0,
                 estimated_cost_usd=0.0,
             ),
         )
 
     def validate_input(self, input: BaseModel) -> list[str]:
         if not hasattr(input, "raw_input") and not isinstance(input, str):
-            return ["Input must have raw_input field or be a string"]
+            return ["NeedProfileBuilder expects raw_input"]
         return []
 
     def can_degrade(self) -> bool:
-        return True  # Can degrade to heuristic parsing
+        return True
