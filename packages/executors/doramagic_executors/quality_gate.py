@@ -1,4 +1,4 @@
-"""Quality gate -- 5-dimension scoring migrated from singleshot _score_quality.
+"""Quality gate -- 5-dimension scoring 5-dimension scoring for skill quality assessment.
 
 Dimensions (100-point scale):
   Coverage    (30%) -- required sections present, workflow depth, anti-pattern depth
@@ -25,7 +25,6 @@ def score_quality(skill_md: str) -> dict:
     """Score SKILL.md on 5 dimensions (100-point scale).
 
     Returns dict with total, passed, blockers, and per-dimension scores.
-    Migrated from singleshot _score_quality (lines 1427-1500).
     """
     lines = skill_md.strip().splitlines()
     blockers: list[str] = []

@@ -280,7 +280,7 @@ class TestRepoTypeClassifier:
 # --- Test 5: Quality gate ---
 
 class TestQualityGate:
-    """Test quality scoring migrated from singleshot."""
+    """Test quality scoring for skill quality assessment."""
 
     def test_high_quality_skill(self):
         from doramagic_executors.quality_gate import score_quality

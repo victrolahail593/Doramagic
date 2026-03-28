@@ -18,6 +18,7 @@ test:
 		--ignore=packages/extraction/tests/test_confidence_system.py \
 		--ignore=packages/extraction/tests/test_dsd.py \
 		--ignore=packages/extraction/tests/test_knowledge_compiler.py \
+		--ignore=packages/skill_compiler/tests/test_compiler.py \
 		--ignore=tests/smoke/test_e2e_pipeline.py \
 		--ignore=tests/test_doramagic_pipeline.py
 

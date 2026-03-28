@@ -18,13 +18,8 @@ venv/
 # Data (large files)
 data/snapshots/*.sqlite
 data/snapshots/*.parquet
-
-# Claude Code worktrees
-.claude/worktrees/
-.worktrees/
-
-# Deprecated model-specific variants
-_deprecated_variants/
+data/fixtures/snapshots/
+data/fixtures/platform_rules.json
 
 # Run outputs (generated)
 runs/
@@ -34,21 +29,6 @@ reports/
 # Environment
 .env
 *.env.local
-
-# Cloned third-party repos in experiments (large, not ours)
-experiments/exp-why-extraction/daily_stock_analysis/
-experiments/exp-why-extraction/vnpy/
-experiments/exp-why-extraction/funNLP/
-
-# Claude Code internal
-.claude/
-
-# OpenClaw test data
-openclaw-test/
-
-# Cloned experiment repos (large, not ours)
-experiments/*/artifacts/_repo/
-experiments/*/soul-extractor-output/artifacts/_repo/
 
 # Runtime logs
 logs/
@@ -63,15 +43,33 @@ logs/
 secrets.json
 *.key
 *.pem
-# races/ contains internal experiments — do not publish
-races/
+
+# Binary files
+*.pdf
+*.xlsx
+*.jpeg
+*.jpg
+*.png
 
 # Internal artifacts (not for public repo)
+docs/
 research/
 experiments/
+races/
+INDEX.md
 TODOS.md
 DECISIONS*.md
 WORKLOG*.md
+brand/
+
+# Deprecated model-specific variants and legacy skills
+_deprecated_variants/
+skills/doramagic-s1/
+skills/doramagic-s2/
+skills/doramagic-s3/
+skills/doramagic-s4/
+skills/soul-extractor/
+skills/skill-forge/
 
 # Internal dev scripts
 scripts/dev/deploy_to_macmini.sh
@@ -79,40 +77,10 @@ scripts/dev/race_precheck.py
 scripts/dev/generate_gemini_prompt.py
 scripts/dev/capture_eval_baseline.py
 
-# Internal docs
-docs/PRODUCT_MANUAL.md
-docs/full-integration-dev-brief.md
-docs/doramagic-product-dev-brief.md
-docs/product-design-adjustment.md
-docs/plans/
-
-# Binary files
-*.pdf
-*.xlsx
-
-# Security reports (local only)
-.gstack/
-data/fixtures/snapshots/
-brand/
-*.jpeg
-*.jpg
-*.png
-data/fixtures/platform_rules.json
-INDEX.md
-docs/brainstorm/
-docs/research/
-docs/dev-context-briefing.md
-docs/doramagic-dev-manual-v5.3.md
-docs/doramagic-product-dev-requirements.md
-docs/engineering-plan-v1.md
-docs/supplementary-dev-brief.md
-docs/dev-plan-codex-reference.md
-docs/20260320_*.md
-skills/doramagic-s1/
-skills/doramagic-s2/
-skills/doramagic-s3/
-skills/doramagic-s4/
-skills/soul-extractor/
-skills/skill-forge/
-docs/
+# Tool-specific
+.claude/
+.claude/worktrees/
+.worktrees/
 .claire/
+.gstack/
+openclaw-test/

@@ -192,7 +192,7 @@ def main() -> None:
 
 
 def _build_rich_message(result, delivery_dir: Path) -> str:
-    """Build a rich Chinese summary message (replicating singleshot's output format)."""
+    """Build a rich Chinese summary message (matching the standard output format)."""
     arts = result.phase_artifacts
 
     lines = ["## Doramagic 道具锻造完成！", ""]

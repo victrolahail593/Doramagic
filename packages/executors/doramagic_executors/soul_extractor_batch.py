@@ -299,7 +299,7 @@ class SoulExtractorBatch:
     ) -> None:
         """Inject top community findings as unsaid_traps into souls.
 
-        Replicates singleshot's soul enrichment logic (lines 593-601).
+        Enriches soul data with community signals and confidence tags.
         """
         for repo in successful:
             signals = community.get(repo.repo_id, {})

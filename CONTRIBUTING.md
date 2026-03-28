@@ -5,32 +5,41 @@
 ```bash
 git clone https://github.com/tangweigang-jpg/Doramagic.git
 cd Doramagic
-python3 -m venv .venv
-source .venv/bin/activate
-pip install pydantic pytest
+uv venv && source .venv/bin/activate
+uv pip install -e ".[dev]"
 ```
 
 ## Running Tests
 
 ```bash
+make test
+```
+
+Or manually:
+
+```bash
 PYTHONPATH=packages/contracts:packages/extraction:packages/shared_utils:packages/community:packages/cross_project:packages/skill_compiler:packages/orchestration:packages/platform_openclaw:packages/domain_graph:packages/controller:packages/executors:packages/racekit:packages/evals \
-  python -m pytest tests/ packages/ -v \
+  .venv/bin/python -m pytest tests/ packages/ -v \
   --ignore=packages/preextract_api \
   --ignore=packages/doramagic_product
 ```
 
-Or simply:
-```bash
-make test
-```
-
 ## Project Structure
 
-- `packages/` — Core Python extraction engine (contracts, extraction, orchestration, etc.)
-- `bricks/` — 278 knowledge bricks across 34 frameworks/domains (JSONL format)
-- `skills/doramagic/` — OpenClaw / Claude Code skill definition
-- `tests/` — Integration and smoke tests
-- `scripts/` — Utility and release scripts
+- `packages/` -- Core Python engine (contracts, controller, executors, extraction, orchestration, etc.)
+- `bricks/` -- 278 knowledge bricks across 34 frameworks/domains (JSONL format)
+- `skills/doramagic/` -- Self-contained OpenClaw / Claude Code skill bundle
+- `tests/` -- Unit and E2E smoke tests (26 tests)
+- `scripts/` -- Utility and release scripts
+
+## Architecture Overview
+
+Doramagic v12.1.1 uses a **conditional DAG** (not a linear pipeline):
+
+- `packages/controller/` -- FlowController with conditional edge FSM
+- `packages/executors/` -- Phase executors (NeedProfileBuilder, WorkerSupervisor, DiscoveryRunner, etc.)
+- `packages/extraction/` -- Stage 0-5 soul extraction pipeline (runs inside each RepoWorker)
+- `packages/contracts/` -- Pydantic schemas shared across all packages
 
 ## Adding Knowledge Bricks
 
@@ -58,13 +67,32 @@ Requirements:
 
 After adding bricks, update the framework mapping in `packages/extraction/doramagic_extraction/brick_injection.py`.
 
+## Code Quality
+
+```bash
+make lint       # ruff check
+make format     # ruff format
+make typecheck  # mypy on contracts
+make check      # all of the above + tests
+```
+
 ## Pull Requests
 
 1. Fork the repo
 2. Create a feature branch
 3. Make your changes
-4. Run `make test`
-5. Submit a PR with a clear description (explain WHY, not WHAT)
+4. Run `make check` (lint + typecheck + tests must pass)
+5. Submit a PR with a clear description (explain **WHY**, not what)
+
+## Pre-release Checklist
+
+Before pushing to GitHub, run the preflight check:
+
+```bash
+bash scripts/publish_preflight.sh
+```
+
+This validates: community standard files, no hardcoded IPs/secrets/paths, no internal artifacts, version consistency, and lockfile tracking.
 
 ## License
 

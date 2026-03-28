@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Doramagic — GitHub Release Preflight Check
+# Doramagic -- GitHub Release Preflight Check
 #
 # Run this BEFORE every GitHub push/release.
 # All checks must pass. Any failure blocks the release.
@@ -31,9 +31,9 @@ warn() { echo -e "  ${YELLOW}WARN${NC}  $1"; WARN_COUNT=$((WARN_COUNT + 1)); }
 
 echo -e "\n${BOLD}=== Doramagic Publish Preflight ===${NC}\n"
 
-# ── 1. Community standard files ──
-echo -e "${BOLD}[1/8] Community standard files${NC}"
-for f in README.md LICENSE CHANGELOG.md CONTRIBUTING.md SECURITY.md .env.example .gitignore; do
+# -- 1. Community standard files --
+echo -e "${BOLD}[1/9] Community standard files${NC}"
+for f in README.md LICENSE CHANGELOG.md CONTRIBUTING.md SECURITY.md INSTALL.md .env.example .gitignore; do
     if [[ -f "$f" ]]; then
         pass "$f exists"
     else
@@ -48,8 +48,8 @@ grep_tracked() {
     git ls-files -z "$@" | xargs -0 grep -n "$pattern" 2>/dev/null || true
 }
 
-# ── 2. No hardcoded internal IPs ──
-echo -e "\n${BOLD}[2/8] No hardcoded internal IPs${NC}"
+# -- 2. No hardcoded internal IPs --
+echo -e "\n${BOLD}[2/9] No hardcoded internal IPs${NC}"
 IP_HITS=$(grep_tracked '192\.168\.[0-9]\+\.[0-9]\+' -- '*.py' '*.sh' '*.md' '*.yml' '*.yaml' '*.json' | grep -v 'publish_preflight.sh' || true)
 if [[ -z "$IP_HITS" ]]; then
     pass "No internal IPs found"
@@ -58,8 +58,8 @@ else
     echo "$IP_HITS" | head -20 | sed 's/^/         /'
 fi
 
-# ── 3. No credentials or secrets ──
-echo -e "\n${BOLD}[3/8] No credentials or secrets${NC}"
+# -- 3. No credentials or secrets --
+echo -e "\n${BOLD}[3/9] No credentials or secrets${NC}"
 SECRET_HITS=$(grep_tracked 'sk-ant\|sk-[a-zA-Z0-9]\{20,\}\|ghp_\|gho_\|github_pat_\|password\s*=\s*["\x27][A-Za-z0-9]' -- '*.py' '*.ts' '*.js' '*.json' '*.md' | grep -v '.env.example\|models.json.example\|publish_preflight.sh' || true)
 if [[ -z "$SECRET_HITS" ]]; then
     pass "No secrets found"
@@ -68,8 +68,8 @@ else
     echo "$SECRET_HITS" | head -20 | sed 's/^/         /'
 fi
 
-# ── 4. No hardcoded paths ──
-echo -e "\n${BOLD}[4/8] No hardcoded user paths${NC}"
+# -- 4. No hardcoded paths --
+echo -e "\n${BOLD}[4/9] No hardcoded user paths${NC}"
 PATH_HITS=$(grep_tracked '/Users/\|/home/tangsir\|/home/admin\|vibecoding\|Doramagic-racer' -- '*.py' '*.sh' '*.md' '*.yml' | grep -v 'publish_preflight.sh' || true)
 if [[ -z "$PATH_HITS" ]]; then
     pass "No hardcoded user paths"
@@ -78,8 +78,8 @@ else
     echo "$PATH_HITS" | head -20 | sed 's/^/         /'
 fi
 
-# ── 5. No internal artifacts (stranger test) ──
-echo -e "\n${BOLD}[5/8] No internal artifacts${NC}"
+# -- 5. No internal artifacts (stranger test) --
+echo -e "\n${BOLD}[5/9] No internal artifacts${NC}"
 
 # Files that should never be in a public repo
 INTERNAL_PATTERNS=(
@@ -126,7 +126,7 @@ else
 fi
 
 # Directories that should not be public
-for dir in research experiments races; do
+for dir in research experiments races docs; do
     if [[ -d "./$dir" ]] && git ls-files "$dir" 2>/dev/null | head -1 | grep -q .; then
         fail "$dir/ is tracked by git (should be gitignored)"
     else
@@ -134,26 +134,28 @@ for dir in research experiments races; do
     fi
 done
 
-# TODOS.md (internal)
-if git ls-files TODOS.md 2>/dev/null | grep -q .; then
-    fail "TODOS.md is tracked (internal file)"
-else
-    pass "TODOS.md not tracked"
-fi
+# Internal files that should not be tracked
+for f in TODOS.md INDEX.md; do
+    if git ls-files "$f" 2>/dev/null | grep -q .; then
+        fail "$f is tracked (internal file)"
+    else
+        pass "$f not tracked"
+    fi
+done
 
-# ── 6. Stranger test — list non-code files for human review ──
+# -- 6. Stranger test -- list non-code files for human review --
 echo -e "\n${BOLD}[6/9] Stranger test (manual review required)${NC}"
 NON_CODE=$(git ls-files '*.md' '*.txt' '*.rst' '*.html' '*.pdf' '*.py' | grep -v '^packages/\|^tests/\|^scripts/\|^skills/doramagic/\|^bricks/\|^data/fixtures/' | grep -v '^README\|^LICENSE\|^CHANGELOG\|^CONTRIBUTING\|^SECURITY\|^INSTALL\|^Makefile\|^pyproject\|^\.env\|^\.git\|^models\.json' || true)
 if [[ -z "$NON_CODE" ]]; then
     pass "No unexpected non-code files"
 else
-    warn "Non-standard files tracked — does a stranger need each of these?"
+    warn "Non-standard files tracked -- does a stranger need each of these?"
     echo "$NON_CODE" | sed 's/^/         /'
     echo -e "         ${YELLOW}^ Review each file above. Remove if it fails the stranger test.${NC}"
 fi
 
-# ── 7. Version consistency ──
-echo -e "\n${BOLD}[6/8] Version consistency${NC}"
+# -- 7. Version consistency --
+echo -e "\n${BOLD}[7/9] Version consistency${NC}"
 
 # Extract version from pyproject.toml
 PY_VER=$(grep '^version' pyproject.toml 2>/dev/null | head -1 | sed 's/.*"\(.*\)".*/\1/' || echo "unknown")
@@ -169,12 +171,12 @@ echo "         CHANGELOG.md:   $CL_VER"
 if [[ "$SKILL_VER" == "$CL_VER" ]] || [[ "$PY_VER" != "0.1.0" && "$PY_VER" == "$SKILL_VER" ]]; then
     pass "Versions are consistent"
 else
-    warn "Version mismatch — review before tagging"
+    warn "Version mismatch -- review before tagging"
 fi
 
-# ── 7. README freshness ──
+# -- 8. README freshness --
 echo -e "\n${BOLD}[8/9] README freshness${NC}"
-README_VER=$(grep -oP 'v\d+\.\d+\.\d+' README.md 2>/dev/null | head -1 || echo "none")
+README_VER=$(grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' README.md 2>/dev/null | head -1 || echo "none")
 echo "         README mentions: $README_VER"
 if [[ "$README_VER" == "v${SKILL_VER}" ]] || [[ "$README_VER" == "${SKILL_VER}" ]]; then
     pass "README version matches SKILL.md"
@@ -182,7 +184,7 @@ else
     warn "README version ($README_VER) differs from SKILL.md ($SKILL_VER)"
 fi
 
-# ── 8. Lockfile tracked ──
+# -- 9. Dependency lockfile --
 echo -e "\n${BOLD}[9/9] Dependency lockfile${NC}"
 if [[ -f "uv.lock" ]]; then
     if git ls-files uv.lock 2>/dev/null | grep -q .; then
@@ -194,15 +196,15 @@ else
     warn "uv.lock not found"
 fi
 
-# ── Summary ──
-echo -e "\n${BOLD}════════════════════════════════════${NC}"
+# -- Summary --
+echo -e "\n${BOLD}====================================${NC}"
 if [[ $FAIL_COUNT -eq 0 && $WARN_COUNT -eq 0 ]]; then
-    echo -e "${GREEN}${BOLD}ALL CHECKS PASSED${NC} — clear to release"
+    echo -e "${GREEN}${BOLD}ALL CHECKS PASSED${NC} -- clear to release"
 elif [[ $FAIL_COUNT -eq 0 ]]; then
-    echo -e "${YELLOW}${BOLD}$WARN_COUNT WARNING(s)${NC} — review before release"
+    echo -e "${YELLOW}${BOLD}$WARN_COUNT WARNING(s)${NC} -- review before release"
 else
-    echo -e "${RED}${BOLD}$FAIL_COUNT FAILURE(s), $WARN_COUNT WARNING(s)${NC} — RELEASE BLOCKED"
+    echo -e "${RED}${BOLD}$FAIL_COUNT FAILURE(s), $WARN_COUNT WARNING(s)${NC} -- RELEASE BLOCKED"
 fi
-echo -e "${BOLD}════════════════════════════════════${NC}\n"
+echo -e "${BOLD}====================================${NC}\n"
 
 exit $FAIL_COUNT
