@@ -966,7 +966,11 @@ Output ONLY valid JSON, no other text."""
 
 def read_repo_files(repo_dir, focus_files=None, max_chars=30000):
     """Read key files from a repo directory."""
+    if not repo_dir or str(repo_dir).strip() == "":
+        return ""  # No local dir — metadata-only repo, cannot read files
     repo_path = Path(repo_dir)
+    if not repo_path.is_absolute():
+        return ""  # Refuse relative paths (prevents CWD self-reference)
     if not repo_path.exists():
         return ""
 
