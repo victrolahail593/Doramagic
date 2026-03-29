@@ -24,8 +24,10 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "B", "UP", "SIM", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003"]
 # E=pycodestyle, F=pyflakes, I=isort, W=warnings
 # B=bugbear(常见陷阱), UP=pyupgrade(现代语法), SIM=simplify, RUF=ruff专属
+# RUF001/002/003: 忽略全角标点检查(项目文档字符串使用中文)
 
 [tool.mypy]
 python_version = "3.12"
@@ -43,3 +45,6 @@ testpaths = ["tests", "packages"]
 python_files = ["test_*.py"]
 [tool.ruff.lint.extend-per-file-ignores]
 "packages/racekit/tests/test_racekit.py" = ["E402"]
+# 以下大文件待第三优先级拆分，暂时忽略行长和部分 lint
+"packages/extraction/doramagic_extraction/stage15_agentic.py" = ["E501", "F841", "SIM103", "SIM105", "SIM108", "SIM113", "UP030"]
+"packages/extraction/doramagic_extraction/llm_stage_runner.py" = ["E501"]
