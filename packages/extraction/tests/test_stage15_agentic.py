@@ -8,11 +8,8 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import List, Optional, Sequence
-from unittest.mock import MagicMock
-
-import pytest
 
 # ---------------------------------------------------------------------------
 # sys.path: allow running from any working directory
@@ -38,17 +35,17 @@ from doramagic_contracts.extraction import (  # noqa: E402
     Stage15Budget,
     Stage15Toolset,
 )
-from doramagic_shared_utils.llm_adapter import LLMMessage, LLMResponse, MockLLMAdapter  # noqa: E402
-from doramagic_shared_utils.capability_router import CapabilityRouter  # noqa: E402
-
-from doramagic_extraction.stage15_agentic import (  # noqa: E402
-    check_claims_have_evidence,
-    run_stage15_agentic,
+from doramagic_extraction.stage15_agentic import run_stage15_agentic  # noqa: E402
+from doramagic_extraction.stage15_artifacts import (  # noqa: E402
     _parse_json_from_llm,
+    check_claims_have_evidence,
+)
+from doramagic_extraction.stage15_tools import (  # noqa: E402
     _tool_list_tree,
     _tool_read_file,
     _tool_search_repo,
 )
+from doramagic_shared_utils.llm_adapter import LLMMessage, MockLLMAdapter  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -89,7 +86,7 @@ def _artifact_root(input_data: Stage15AgenticInput) -> Path:
     return Path(input_data.repo.local_path) / "artifacts" / "stage15"
 
 
-def _make_mock_adapter(responses: Optional[List[str]] = None) -> MockLLMAdapter:
+def _make_mock_adapter(responses: list[str] | None = None) -> MockLLMAdapter:
     """Build a mock adapter with realistic tool-selection responses."""
     return MockLLMAdapter(responses=responses)
 
@@ -98,74 +95,93 @@ def _make_mock_adapter(responses: Optional[List[str]] = None) -> MockLLMAdapter:
 # LLM response sequences for different scenarios
 # ---------------------------------------------------------------------------
 
-def _search_then_read_then_append(hypothesis_id: str, file_path: str = "src/app/api/chat/route.ts") -> List[str]:
+
+def _search_then_read_then_append(
+    hypothesis_id: str, file_path: str = "src/app/api/chat/route.ts"
+) -> list[str]:
     """Responses: search → read_file → evaluate (continue=False) → adapter concludes."""
     return [
         # Turn 1: tool selection → search_repo
-        json.dumps({
-            "tool": "search_repo",
-            "tool_input": {"pattern": "NUTRITION_SYSTEM_PROMPT", "file_glob": "*.ts", "max_results": 5},
-            "reasoning": "Search for the system prompt to check for Chinese food handling",
-        }),
+        json.dumps(
+            {
+                "tool": "search_repo",
+                "tool_input": {
+                    "pattern": "NUTRITION_SYSTEM_PROMPT",
+                    "file_glob": "*.ts",
+                    "max_results": 5,
+                },
+                "reasoning": "Search for the system prompt to check for Chinese food handling",
+            }
+        ),
         # Turn 1 eval: found something, read file next
-        json.dumps({
-            "hypothesis_status": "pending",
-            "confidence": "medium",
-            "reasoning": "Found the system prompt, need to read the file content",
-            "should_continue": True,
-            "next_action_hint": "read the file to check system prompt content",
-        }),
+        json.dumps(
+            {
+                "hypothesis_status": "pending",
+                "confidence": "medium",
+                "reasoning": "Found the system prompt, need to read the file content",
+                "should_continue": True,
+                "next_action_hint": "read the file to check system prompt content",
+            }
+        ),
         # Turn 2: tool selection → read_file
-        json.dumps({
-            "tool": "read_file",
-            "tool_input": {"path": file_path, "start_line": 1, "end_line": 30},
-            "reasoning": "Read the chat route to examine system prompt content",
-        }),
+        json.dumps(
+            {
+                "tool": "read_file",
+                "tool_input": {"path": file_path, "start_line": 1, "end_line": 30},
+                "reasoning": "Read the chat route to examine system prompt content",
+            }
+        ),
         # Turn 2 eval: read file, now conclude
-        json.dumps({
-            "hypothesis_status": "confirmed",
-            "confidence": "high",
-            "reasoning": "Found no Chinese-specific handling in the system prompt",
-            "should_continue": False,
-            "next_action_hint": "",
-        }),
+        json.dumps(
+            {
+                "hypothesis_status": "confirmed",
+                "confidence": "high",
+                "reasoning": "Found no Chinese-specific handling in the system prompt",
+                "should_continue": False,
+                "next_action_hint": "",
+            }
+        ),
     ]
 
 
-def _append_immediately(status: str = "confirmed", statement: str = "Test claim.") -> List[str]:
+def _append_immediately(status: str = "confirmed", statement: str = "Test claim.") -> list[str]:
     """LLM immediately records a claim."""
     return [
-        json.dumps({
-            "tool": "append_finding",
-            "tool_input": {
-                "status": status,
-                "statement": statement,
-                "confidence": "high",
-                "evidence_path": "src/app/api/chat/route.ts",
-                "evidence_start_line": 12,
-                "evidence_end_line": 45,
-                "evidence_snippet": "export async function POST(req: Request) { ... }",
-            },
-            "reasoning": "Direct evidence found in Stage 1 findings",
-        }),
+        json.dumps(
+            {
+                "tool": "append_finding",
+                "tool_input": {
+                    "status": status,
+                    "statement": statement,
+                    "confidence": "high",
+                    "evidence_path": "src/app/api/chat/route.ts",
+                    "evidence_start_line": 12,
+                    "evidence_end_line": 45,
+                    "evidence_snippet": "export async function POST(req: Request) { ... }",
+                },
+                "reasoning": "Direct evidence found in Stage 1 findings",
+            }
+        ),
     ]
 
 
-def _reject_immediately(statement: str = "Rejected claim.") -> List[str]:
+def _reject_immediately(statement: str = "Rejected claim.") -> list[str]:
     return [
-        json.dumps({
-            "tool": "append_finding",
-            "tool_input": {
-                "status": "rejected",
-                "statement": statement,
-                "confidence": "high",
-                "evidence_path": "src/lib/store.ts",
-                "evidence_start_line": 1,
-                "evidence_end_line": 8,
-                "evidence_snippet": "// In-memory store only — no persistence.",
-            },
-            "reasoning": "Stage 1 evidence directly contradicts the hypothesis",
-        }),
+        json.dumps(
+            {
+                "tool": "append_finding",
+                "tool_input": {
+                    "status": "rejected",
+                    "statement": statement,
+                    "confidence": "high",
+                    "evidence_path": "src/lib/store.ts",
+                    "evidence_start_line": 1,
+                    "evidence_end_line": 8,
+                    "evidence_snippet": "// In-memory store only — no persistence.",
+                },
+                "reasoning": "Stage 1 evidence directly contradicts the hypothesis",
+            }
+        ),
     ]
 
 
@@ -234,9 +250,11 @@ class TestRunStage15AgenticMock:
         )
         # First 2 hypotheses get confirmed, h-003 gets rejected
         responses = (
-            _append_immediately("confirmed", "Chat API claim") +
-            _append_immediately("confirmed", "Rate limit claim") +
-            _reject_immediately("No Vercel KV integration found — persistence is not implemented.")
+            _append_immediately("confirmed", "Chat API claim")
+            + _append_immediately("confirmed", "Rate limit claim")
+            + _reject_immediately(
+                "No Vercel KV integration found — persistence is not implemented."
+            )
         )
         adapter = MockLLMAdapter(responses=responses)
 
@@ -263,11 +281,15 @@ class TestRunStage15AgenticMock:
             stop_after_no_gain_rounds=2,
         )
         # Each hypothesis tries to search + read, but budget runs out
-        adapter = MockLLMAdapter(default_response=json.dumps({
-            "tool": "search_repo",
-            "tool_input": {"pattern": "test", "file_glob": "*.ts", "max_results": 5},
-            "reasoning": "Searching for patterns",
-        }))
+        adapter = MockLLMAdapter(
+            default_response=json.dumps(
+                {
+                    "tool": "search_repo",
+                    "tool_input": {"pattern": "test", "file_glob": "*.ts", "max_results": 5},
+                    "reasoning": "Searching for patterns",
+                }
+            )
+        )
 
         result = run_stage15_agentic(input_data, adapter=adapter)
 
@@ -286,8 +308,13 @@ class TestRunStage15AgenticMock:
 
         assert result.data is not None
         artifact_root = _artifact_root(input_data)
-        for fname in ("hypotheses.jsonl", "exploration_log.jsonl", "claim_ledger.jsonl",
-                      "evidence_index.json", "context_digest.md"):
+        for fname in (
+            "hypotheses.jsonl",
+            "exploration_log.jsonl",
+            "claim_ledger.jsonl",
+            "evidence_index.json",
+            "context_digest.md",
+        ):
             assert (artifact_root / fname).exists(), f"{fname} not found"
 
     def test_exploration_log_entries_are_valid_json(self, tmp_path: Path) -> None:
@@ -320,9 +347,9 @@ class TestRunStage15AgenticMock:
                 related_finding_ids=[],
             ),
         )
-        seen_order: List[str] = []
+        seen_order: list[str] = []
 
-        def capture_response(messages: Sequence[LLMMessage], system: Optional[str]) -> str:
+        def capture_response(messages: Sequence[LLMMessage], system: str | None) -> str:
             # Extract hypothesis_id from the prompt content
             for msg in messages:
                 for line in msg.content.splitlines():
@@ -330,15 +357,17 @@ class TestRunStage15AgenticMock:
                         hyp_id = line.split(":", 1)[1].strip()
                         if hyp_id not in seen_order:
                             seen_order.append(hyp_id)
-            return json.dumps({
-                "tool": "append_finding",
-                "tool_input": {
-                    "status": "pending",
-                    "statement": "test",
-                    "confidence": "low",
-                },
-                "reasoning": "test",
-            })
+            return json.dumps(
+                {
+                    "tool": "append_finding",
+                    "tool_input": {
+                        "status": "pending",
+                        "statement": "test",
+                        "confidence": "low",
+                    },
+                    "reasoning": "test",
+                }
+            )
 
         adapter = MockLLMAdapter(response_fn=capture_response)
         run_stage15_agentic(input_data, adapter=adapter)
@@ -374,6 +403,7 @@ class TestRunStage15AgenticMock:
     def test_no_real_llm_needed_for_mock_path(self, tmp_path: Path) -> None:
         """MockLLMAdapter must work without any env vars."""
         import os
+
         saved = {}
         for key in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY"):
             saved[key] = os.environ.pop(key, None)
@@ -401,28 +431,35 @@ class TestRunStage15AgenticMock:
         adapter = MockLLMAdapter(
             responses=[
                 # LLM tries search_repo (disabled) then falls back to append
-                json.dumps({
-                    "tool": "search_repo",
-                    "tool_input": {"pattern": "test", "file_glob": "*.ts", "max_results": 3},
-                    "reasoning": "trying search",
-                }),
-                json.dumps({
-                    "hypothesis_status": "pending",
-                    "confidence": "low",
-                    "reasoning": "search disabled",
-                    "should_continue": True,
-                    "next_action_hint": "try append_finding",
-                }),
-                json.dumps({
-                    "tool": "append_finding",
-                    "tool_input": {
-                        "status": "pending",
-                        "statement": "Could not fully investigate",
+                json.dumps(
+                    {
+                        "tool": "search_repo",
+                        "tool_input": {"pattern": "test", "file_glob": "*.ts", "max_results": 3},
+                        "reasoning": "trying search",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "hypothesis_status": "pending",
                         "confidence": "low",
-                    },
-                    "reasoning": "no more tools",
-                }),
-            ] * 5
+                        "reasoning": "search disabled",
+                        "should_continue": True,
+                        "next_action_hint": "try append_finding",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "tool": "append_finding",
+                        "tool_input": {
+                            "status": "pending",
+                            "statement": "Could not fully investigate",
+                            "confidence": "low",
+                        },
+                        "reasoning": "no more tools",
+                    }
+                ),
+            ]
+            * 5
         )
 
         result = run_stage15_agentic(input_data, adapter=adapter)
@@ -437,6 +474,7 @@ class TestCheckClaimsHaveEvidence:
 
     def test_pending_claim_without_evidence_passes(self) -> None:
         from doramagic_contracts.extraction import ClaimRecord, ExplorationLogEntry
+
         claim = ClaimRecord(
             claim_id="C-001",
             statement="test",
@@ -458,6 +496,7 @@ class TestCheckClaimsHaveEvidence:
 
     def test_confirmed_claim_without_evidence_fails(self) -> None:
         from doramagic_contracts.extraction import ClaimRecord, ExplorationLogEntry
+
         claim = ClaimRecord(
             claim_id="C-001",
             statement="confirmed test",
@@ -479,6 +518,7 @@ class TestCheckClaimsHaveEvidence:
 
     def test_confirmed_claim_with_traceable_evidence_passes(self) -> None:
         from doramagic_contracts.extraction import ClaimRecord, ExplorationLogEntry
+
         evidence = EvidenceRef(
             kind="file_line",
             path="src/test.ts",
@@ -508,6 +548,7 @@ class TestCheckClaimsHaveEvidence:
     def test_confirmed_claim_with_untraceable_evidence_fails(self) -> None:
         """Evidence not present in any step's produced_evidence_refs should fail."""
         from doramagic_contracts.extraction import ClaimRecord, ExplorationLogEntry
+
         evidence = EvidenceRef(
             kind="file_line",
             path="src/test.ts",
@@ -541,7 +582,7 @@ class TestParseJsonFromLlm:
         assert result == {"tool": "search_repo"}
 
     def test_json_in_markdown_fence(self) -> None:
-        text = "```json\n{\"tool\": \"read_file\"}\n```"
+        text = '```json\n{"tool": "read_file"}\n```'
         result = _parse_json_from_llm(text)
         assert result == {"tool": "read_file"}
 
@@ -591,10 +632,12 @@ class TestToolExecutors:
         assert evidence.start_line == 1
 
     def test_read_file_with_line_range(self, tmp_path: Path) -> None:
-        lines = "\n".join("line{0}".format(i) for i in range(1, 50))
+        lines = "\n".join(f"line{i}" for i in range(1, 50))
         (tmp_path / "big.py").write_text(lines)
 
-        obs, evidence = _tool_read_file(tmp_path, {"path": "big.py", "start_line": 10, "end_line": 15})
+        obs, evidence = _tool_read_file(
+            tmp_path, {"path": "big.py", "start_line": 10, "end_line": 15}
+        )
         assert "line10" in obs
         assert evidence is not None
         assert evidence.start_line == 10
@@ -608,7 +651,9 @@ class TestToolExecutors:
         (tmp_path / "src").mkdir()
         (tmp_path / "src" / "api.ts").write_text("export async function POST() {}\n")
 
-        result = _tool_search_repo(tmp_path, {"pattern": "POST", "file_glob": "*.ts", "max_results": 5})
+        result = _tool_search_repo(
+            tmp_path, {"pattern": "POST", "file_glob": "*.ts", "max_results": 5}
+        )
         # Either found it, or got no-match if repo doesn't exist (empty dir case)
         assert isinstance(result, str)
 
