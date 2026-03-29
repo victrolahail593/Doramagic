@@ -45,15 +45,8 @@ class OpenClawAdapter:
         sys.stdout.flush()
 
     async def send_progress(self, update: ProgressUpdate) -> None:
-        """Print progress JSON to stdout. OpenClaw may or may not display it."""
-        progress = {
-            "progress": True,
-            "phase": update.phase,
-            "status": update.status,
-            "message": update.message,
-            "percent": update.percent_complete,
-        }
-        print(json.dumps(progress, ensure_ascii=False))
+        """Print progress text to stdout so OpenClaw can surface it immediately."""
+        print(f"sub_progress [{update.phase}] {update.message}")
         sys.stdout.flush()
 
     async def ask_clarification(self, request: ClarificationRequest) -> str:
@@ -86,8 +79,14 @@ class OpenClawAdapter:
                     schema_version="dm.platform-rules.v1",
                     allowed_tools=["exec", "read", "write"],
                     metadata_openclaw_whitelist=[
-                        "always", "emoji", "homepage", "skillKey",
-                        "primaryEnv", "os", "requires", "install",
+                        "always",
+                        "emoji",
+                        "homepage",
+                        "skillKey",
+                        "primaryEnv",
+                        "os",
+                        "requires",
+                        "install",
                     ],
                     forbid_frontmatter_fields=["cron"],
                     storage_prefix="~/clawd/",

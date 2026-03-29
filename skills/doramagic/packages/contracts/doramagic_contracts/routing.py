@@ -5,7 +5,7 @@ Deterministic routing decisions -- no LLM involved.
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -17,11 +17,18 @@ class RoutingDecision(BaseModel):
       DIRECT_URL     -- user gave explicit repo URL(s), skip Discovery
       NAMED_PROJECT  -- user named a project, targeted Discovery
       DOMAIN_EXPLORE -- user described a domain, broad Discovery
+      BRICK_STITCH   -- domain coverage is strong enough for direct brick stitching
       LOW_CONFIDENCE -- ambiguous input, need clarification
     """
 
     schema_version: str = "dm.routing-decision.v1"
-    route: Literal["DIRECT_URL", "NAMED_PROJECT", "DOMAIN_EXPLORE", "LOW_CONFIDENCE"]
+    route: Literal[
+        "DIRECT_URL",
+        "NAMED_PROJECT",
+        "DOMAIN_EXPLORE",
+        "BRICK_STITCH",
+        "LOW_CONFIDENCE",
+    ]
     skip_discovery: bool = False
     max_repos: int = Field(default=3, ge=1, le=5)
     repo_urls: list[str] = []
@@ -40,7 +47,7 @@ class NeedProfileContract(BaseModel):
     raw_input: str
     keywords: list[str] = []
     intent: str = ""
-    intent_en: Optional[str] = None
+    intent_en: str | None = None
     domain: str = "general"
     search_directions: list[dict] = []
     constraints: list[str] = []
@@ -57,7 +64,7 @@ class DeliveryTier(BaseModel):
     schema_version: str = "dm.delivery-tier.v1"
     tier: Literal["FULL", "PARTIAL_SOULS", "FAST_PATH", "TEMPLATE", "SEARCH_ONLY", "EMPTY"]
     completeness_pct: int = Field(ge=0, le=100)
-    degraded_at_phase: Optional[str] = None
+    degraded_at_phase: str | None = None
     degradation_reason: str = ""
     suggestions: list[str] = []
     user_message: str = ""

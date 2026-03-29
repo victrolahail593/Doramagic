@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import time
 
-from pydantic import BaseModel
-
-from doramagic_contracts.base import DiscoveryCandidate
 from doramagic_community.github_search import search_github
+from doramagic_contracts.base import DiscoveryCandidate
 from doramagic_contracts.cross_project import DiscoveryInput, DiscoveryResult
 from doramagic_contracts.envelope import ErrorCodes, ModuleResultEnvelope, RunMetrics, WarningItem
+from pydantic import BaseModel
 
 MIN_STARS = 30
 
@@ -28,11 +27,11 @@ class DiscoveryRunner:
         excluded = []
 
         if routing and routing.route == "NAMED_PROJECT":
-            candidates = self._targeted_search(routing.project_names, routing.max_repos)
+            candidates = self._targeted_search(routing.project_names, routing.max_repos, config)
             search_evidence = [f"targeted:{name}" for name in routing.project_names]
         else:
             queries = need.github_queries or need.relevance_terms or need.keywords[:3]
-            candidates = self._broad_search(queries, need.max_projects)
+            candidates = self._broad_search(queries, need.max_projects, config)
             search_evidence = [f"broad:{query}" for query in queries[:3]]
 
         filtered = []
@@ -46,7 +45,11 @@ class DiscoveryRunner:
 
         for index, candidate in enumerate(filtered[: need.max_projects]):
             candidate.selected_for_phase_c = True
-            candidate.why_selected = candidate.why_selected or ("top targeted match" if routing and routing.route == "NAMED_PROJECT" else "top domain match")
+            candidate.why_selected = candidate.why_selected or (
+                "top targeted match"
+                if routing and routing.route == "NAMED_PROJECT"
+                else "top domain match"
+            )
             candidate.confidence = max(candidate.confidence, 0.9 if index == 0 else 0.72)
 
         result = DiscoveryResult(
@@ -58,7 +61,8 @@ class DiscoveryRunner:
             no_candidate_reason="" if filtered else "no relevant repositories found",
         )
 
-        status = "ok" if result.candidate_count > 0 else "blocked"
+        # D8: 0 候选时使用 degraded 而非 blocked, 保持与产品设计语义一致
+        status = "ok" if result.candidate_count > 0 else "degraded"
         if excluded:
             warnings.append(
                 WarningItem(
@@ -66,13 +70,15 @@ class DiscoveryRunner:
                     message=f"Filtered {len(excluded)} candidate(s) by relevance gate",
                 )
             )
-        if status == "blocked":
-            warnings.append(WarningItem(code="NO_RESULTS", message="Discovery found no relevant candidates"))
+        if status == "degraded":
+            warnings.append(
+                WarningItem(code="NO_RESULTS", message="Discovery found no relevant candidates")
+            )
 
         return ModuleResultEnvelope(
             module_name="DiscoveryRunner",
             status=status,
-            error_code=ErrorCodes.NO_CANDIDATES if status == "blocked" else None,
+            error_code=ErrorCodes.NO_CANDIDATES if status == "degraded" else None,
             warnings=warnings,
             data=result,
             metrics=RunMetrics(
@@ -84,10 +90,22 @@ class DiscoveryRunner:
             ),
         )
 
-    def _targeted_search(self, names: list[str], limit: int) -> list:
+    def _emit_progress(self, config: object, query: str, candidate_count: int) -> None:
+        event_bus = getattr(config, "event_bus", None)
+        if event_bus is None:
+            return
+        event_bus.emit(
+            "sub_progress",
+            f"搜索 GitHub: '{query}'... 找到 {candidate_count} 个候选",
+            phase="PHASE_B",
+            meta={"query": query, "candidate_count": candidate_count},
+        )
+
+    def _targeted_search(self, names: list[str], limit: int, config: object) -> list:
         candidates = []
         for index, name in enumerate(names[:3]):
             results = search_github([name], top_k=4)
+            self._emit_progress(config, name, len(results))
             for rank, repo in enumerate(results):
                 stars = repo.get("stars", 0)
                 if stars < MIN_STARS:
@@ -106,14 +124,15 @@ class DiscoveryRunner:
                 break
         return candidates[:limit]
 
-    def _broad_search(self, queries: list[str], limit: int) -> list:
+    def _broad_search(self, queries: list[str], limit: int, config: object) -> list:
         merged = []
         seen = set()
         for query in queries[:3]:
             try:
                 results = search_github([query], top_k=max(4, limit))
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
+            self._emit_progress(config, query, len(results))
             for repo in results:
                 full_name = repo.get("name", "")
                 if not full_name or full_name in seen or repo.get("stars", 0) < MIN_STARS:
@@ -157,7 +176,9 @@ class DiscoveryRunner:
             selected_for_phase_d=False,
         )
 
-    def _error(self, message: str, code: str, started: float) -> ModuleResultEnvelope[DiscoveryResult]:
+    def _error(
+        self, message: str, code: str, started: float
+    ) -> ModuleResultEnvelope[DiscoveryResult]:
         return ModuleResultEnvelope(
             module_name="DiscoveryRunner",
             status="error",
