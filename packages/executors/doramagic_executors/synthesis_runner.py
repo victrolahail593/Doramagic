@@ -23,7 +23,7 @@ logger = logging.getLogger("doramagic.synthesis_runner")
 
 # "because" 子句拆分正则
 _BECAUSE_RE = re.compile(
-    r"^(.+?)\s+(?:because|since|as a result of|due to)\s+(.+)$",
+    r"^(.+?)\s+(?:because|as a result of|due to)\s+(.+)$",
     re.IGNORECASE,
 )
 
@@ -299,7 +299,7 @@ class SynthesisRunner:
             divergences=divergences[:6],
             source_provenance_matrix=provenance,
             unknowns=[],
-            compile_ready=True,
+            compile_ready=not iron_law_warning,
             compile_brief_by_section=compile_brief,
         )
 
@@ -360,7 +360,7 @@ class SynthesisRunner:
                 if "[TRAP]" in d.statement:
                     filtered.append(d)
                     continue
-                total_score = score_map.get(d.decision_id, _MIN_QUALITY_SCORE)
+                total_score = score_map.get(d.decision_id, 0)
                 if total_score >= _MIN_QUALITY_SCORE:
                     filtered.append(d)
 

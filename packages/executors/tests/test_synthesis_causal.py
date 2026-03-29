@@ -197,7 +197,7 @@ class TestAntiPatternsCausal:
 
 class TestIronLaw:
     def test_iron_law_triggers_on_no_causal(self):
-        """所有 rationale 都是 generic 时触发 Iron Law 警告。"""
+        """所有 rationale 都是 generic 时触发 Iron Law 警告且阻断编译。"""
         env = _envelope(
             design_philosophy="Some architecture pattern",
             mental_model="[NO_DATA]",
@@ -206,12 +206,14 @@ class TestIronLaw:
         result = _run(_make_input([env, env]))
         warning_codes = [w.code for w in result.warnings]
         assert "IRON_LAW" in warning_codes
+        # compile_ready 应为 False（真正阻断编译）
+        assert result.data.compile_ready is False
         # compile_brief workflow 包含警告
         workflow = result.data.compile_brief_by_section.get("workflow", [])
         assert any("WARNING" in line for line in workflow)
 
     def test_iron_law_not_triggered_with_causal(self):
-        """有因果链时不触发。"""
+        """有因果链时不触发，compile_ready 为 True。"""
         env = _envelope(
             design_philosophy="Use explicit state transitions",
             mental_model="Failures become visible early and repairable in production",
@@ -219,6 +221,7 @@ class TestIronLaw:
         result = _run(_make_input([env]))
         warning_codes = [w.code for w in result.warnings]
         assert "IRON_LAW" not in warning_codes
+        assert result.data.compile_ready is True
 
 
 # ---------------------------------------------------------------------------
