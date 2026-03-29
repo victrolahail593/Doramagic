@@ -254,23 +254,27 @@ if [[ ! -d "$SKILL_DIR" ]]; then
     echo "  ⚠ skills/doramagic not found, skipping ClawHub publish"
 else
     if command -v npx &>/dev/null; then
-        echo "  Publishing dora@$SEMVER to ClawHub..."
-        npx clawhub@latest publish "$SKILL_DIR" \
-            --slug dora \
-            --name "Doramagic" \
-            --version "$SEMVER" \
-            --changelog "Release $VERSION" \
-            --tags latest 2>&1 | tail -3
+        # 发布到两个 slug（历史原因：dora 和 doramagic 都有用户安装）
+        for SLUG in dora doramagic; do
+            echo "  Publishing ${SLUG}@$SEMVER to ClawHub..."
+            npx clawhub@latest publish "$SKILL_DIR" \
+                --slug "$SLUG" \
+                --name "Doramagic" \
+                --version "$SEMVER" \
+                --changelog "Release $VERSION" \
+                --tags latest 2>&1 | tail -1
 
-        if [[ $? -eq 0 ]]; then
-            echo "  ✓ Published dora@$SEMVER to ClawHub"
-            echo "  Note: skill may be hidden for a few minutes during security scan"
-        else
-            echo "  ⚠ ClawHub publish failed (non-blocking, GitHub release is still live)"
-        fi
+            if [[ $? -eq 0 ]]; then
+                echo "  ✓ Published ${SLUG}@$SEMVER"
+            else
+                echo "  ⚠ ${SLUG} publish failed (non-blocking)"
+            fi
+        done
+        echo "  Note: skills may be hidden for a few minutes during security scan"
     else
         echo "  ⚠ npx not found, skipping ClawHub publish"
         echo "  Manual: npx clawhub@latest publish skills/doramagic --slug dora --version $SEMVER"
+        echo "  Manual: npx clawhub@latest publish skills/doramagic --slug doramagic --version $SEMVER"
     fi
 fi
 
