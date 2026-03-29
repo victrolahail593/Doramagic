@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
 import re
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Optional
-
-from pydantic import BaseModel
+from typing import Any
 
 from doramagic_contracts.adapter import ClarificationRequest, PlatformAdapter, ProgressUpdate
 from doramagic_contracts.base import NeedProfile, NeedProfileContract, RoutingDecision
@@ -35,12 +34,19 @@ from doramagic_contracts.skill import (
     SkillCompilerInput,
     ValidationInput,
 )
+from pydantic import BaseModel
 
 from .budget_manager import BudgetManager
 from .event_bus import EventBus
 from .input_router import InputRouter
 from .lease_manager import LeaseManager
-from .state_definitions import CONDITIONAL_EDGES, MAX_REVISE_LOOPS, PHASE_EXECUTOR_MAP, TRANSITIONS, Phase
+from .state_definitions import (
+    CONDITIONAL_EDGES,
+    MAX_REVISE_LOOPS,
+    PHASE_EXECUTOR_MAP,
+    TRANSITIONS,
+    Phase,
+)
 
 logger = logging.getLogger("doramagic.controller")
 
@@ -52,7 +58,7 @@ try:
         CapabilityRouter,
         reset_routing_log,
     )
-except Exception:  # noqa: BLE001
+except Exception:
     CapabilityRouter = None
     TASK_GENERAL = "general"
     TASK_EVIDENCE_EXTRACTION = "evidence_extraction"
@@ -101,7 +107,7 @@ class ControllerState:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ControllerState":
+    def from_dict(cls, data: dict[str, Any]) -> ControllerState:
         return cls(
             run_id=data["run_id"],
             phase=Phase(data["phase"]),
@@ -123,7 +129,7 @@ class ControllerState:
         if isinstance(raw, dict):
             try:
                 return RoutingDecision(**raw)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 return None
         return None
 
@@ -183,7 +189,11 @@ class ControllerState:
         if validation.get("status") == "BLOCKED":
             return True
         for check in validation.get("checks", []):
-            if isinstance(check, dict) and not check.get("passed", True) and check.get("severity") == "blocking":
+            if (
+                isinstance(check, dict)
+                and not check.get("passed", True)
+                and check.get("severity") == "blocking"
+            ):
                 return True
         return False
 
@@ -233,8 +243,9 @@ class FlowController:
         self._lease = LeaseManager(run_dir / "leases", default_ttl_seconds=lease_ttl)
         self._budget = BudgetManager(budget_policy)
         self._router = InputRouter()
-        self._event_bus = EventBus(run_dir)
-        self._state: Optional[ControllerState] = None
+        # run_id 从 run_dir 目录名提取, 确保每条事件都有非空的 run_id
+        self._event_bus = EventBus(run_dir, run_id=run_dir.name)
+        self._state: ControllerState | None = None
         self._run_log: list[dict[str, Any]] = []
         self._capability_router = self._build_capability_router()
 
@@ -242,7 +253,9 @@ class FlowController:
         if resume_run_id:
             self._state = self._load_state(resume_run_id)
             if self._state is None:
-                self._state = self._create_error_state(f"No saved state found for run_id={resume_run_id}")
+                self._state = self._create_error_state(
+                    f"No saved state found for run_id={resume_run_id}"
+                )
                 return self._state
             if self._state.phase == Phase.PHASE_A_CLARIFY and user_input.strip():
                 self._state.clarification_round += 1
@@ -254,12 +267,15 @@ class FlowController:
         self._budget.start()
         self._setup_directories()
         if self._capability_router is not None:
-            try:
+            with contextlib.suppress(Exception):
                 reset_routing_log()
-            except Exception:  # noqa: BLE001
-                pass
 
-        self._emit_event("run_started", "run started", phase=self._state.phase.value, meta={"run_id": self._state.run_id})
+        self._emit_event(
+            "run_started",
+            "run started",
+            phase=self._state.phase.value,
+            meta={"run_id": self._state.run_id},
+        )
         if not resume_run_id:
             await self._send_progress(
                 phase=self._state.phase.value,
@@ -268,7 +284,12 @@ class FlowController:
                 percent=self._phase_progress_pct(self._state.phase),
             )
 
-        while self._state.phase not in (Phase.DONE, Phase.DEGRADED, Phase.ERROR, Phase.PHASE_A_CLARIFY):
+        while self._state.phase not in (
+            Phase.DONE,
+            Phase.DEGRADED,
+            Phase.ERROR,
+            Phase.PHASE_A_CLARIFY,
+        ):
             current = self._state.phase
             await self._step()
             if self._state.phase == current:
@@ -288,13 +309,17 @@ class FlowController:
                 meta={"delivery_tier": self._state.delivery_tier},
             )
         elif self._state.phase == Phase.ERROR:
-            self._emit_event("run_failed", "run failed", phase=self._state.phase.value, status="error")
+            self._emit_event(
+                "run_failed", "run failed", phase=self._state.phase.value, status="error"
+            )
         return self._state
 
     async def _step(self) -> None:
         phase = self._state.phase
         self._log_event("phase_started", {"phase": phase.value})
-        self._emit_event("phase_started", f"{phase.value} started", phase=phase.value, status="started")
+        self._emit_event(
+            "phase_started", f"{phase.value} started", phase=phase.value, status="started"
+        )
         await self._send_progress(
             phase=phase.value,
             status="started",
@@ -310,7 +335,9 @@ class FlowController:
             await self._dispatch_executor(phase)
 
         if self._state.phase != phase:
-            self._emit_event("phase_completed", f"{phase.value} completed", phase=phase.value, status="completed")
+            self._emit_event(
+                "phase_completed", f"{phase.value} completed", phase=phase.value, status="completed"
+            )
             await self._send_progress(
                 phase=phase.value,
                 status="completed",
@@ -331,7 +358,9 @@ class FlowController:
             self._state.degradation_log.append("NeedProfileBuilder returned no profile")
             return
 
-        profile = result.data if isinstance(result.data, NeedProfile) else NeedProfile(**result.data)
+        profile = (
+            result.data if isinstance(result.data, NeedProfile) else NeedProfile(**result.data)
+        )
         routing = self._router.route(profile)
         if routing.route == "LOW_CONFIDENCE" and self._state.clarification_round >= 2:
             routing = RoutingDecision(
@@ -345,15 +374,26 @@ class FlowController:
             )
 
         self._state.phase_artifacts["routing_decision"] = routing.model_dump()
-        self._state.phase_artifacts["need_profile_contract"] = self._build_need_profile_contract(profile, routing).model_dump()
-        self._state.phase_artifacts["accumulated_knowledge"] = self._load_accumulated_knowledge(profile.domain)
+        self._state.phase_artifacts["need_profile_contract"] = self._build_need_profile_contract(
+            profile, routing
+        ).model_dump()
+        self._state.phase_artifacts["accumulated_knowledge"] = self._load_accumulated_knowledge(
+            profile.domain
+        )
 
         if routing.route == "LOW_CONFIDENCE" and self._state.clarification_round < 2:
             question = self._clarification_question(profile, result)
             await self._adapter.ask_clarification(
-                ClarificationRequest(question=question, round_number=self._state.clarification_round + 1)
+                ClarificationRequest(
+                    question=question, round_number=self._state.clarification_round + 1
+                )
             )
-            self._emit_event("degraded", "clarification requested", phase=Phase.PHASE_A_CLARIFY.value, status="clarify")
+            self._emit_event(
+                "degraded",
+                "clarification requested",
+                phase=Phase.PHASE_A_CLARIFY.value,
+                status="clarify",
+            )
             self._state.phase = Phase.PHASE_A_CLARIFY
             self._save_state()
             return
@@ -374,7 +414,9 @@ class FlowController:
                 self._state.phase = Phase.ERROR
                 self._state.degradation_log.append(f"{executor_name} not registered")
             else:
-                self._enter_degraded(f"{executor_name} not registered", self._infer_delivery_tier(phase))
+                self._enter_degraded(
+                    f"{executor_name} not registered", self._infer_delivery_tier(phase)
+                )
             return
 
         result = await self._run_executor(executor_name, executor)
@@ -382,7 +424,9 @@ class FlowController:
             if phase == Phase.PHASE_G:
                 self._state.phase = Phase.ERROR
             else:
-                self._enter_degraded(f"{executor_name} returned no result", self._infer_delivery_tier(phase))
+                self._enter_degraded(
+                    f"{executor_name} returned no result", self._infer_delivery_tier(phase)
+                )
             return
 
         if result.status == "error":
@@ -390,7 +434,10 @@ class FlowController:
                 self._state.phase = Phase.ERROR
                 self._state.degradation_log.append(f"{executor_name} failed during packaging")
             else:
-                self._enter_degraded(f"{executor_name} failed: {result.error_code or 'unknown'}", self._infer_delivery_tier(phase))
+                self._enter_degraded(
+                    f"{executor_name} failed: {result.error_code or 'unknown'}",
+                    self._infer_delivery_tier(phase),
+                )
             return
 
         if phase == Phase.PHASE_C and result.status == "degraded":
@@ -433,9 +480,13 @@ class FlowController:
             return
         self._transition(next_phase)
 
-    async def _run_executor(self, name: str, executor: PhaseExecutor) -> Optional[ModuleResultEnvelope]:
+    async def _run_executor(
+        self, name: str, executor: PhaseExecutor
+    ) -> ModuleResultEnvelope | None:
         if self._budget.is_exceeded():
-            self._enter_degraded(f"Budget exceeded before {name}", self._infer_delivery_tier(self._state.phase))
+            self._enter_degraded(
+                f"Budget exceeded before {name}", self._infer_delivery_tier(self._state.phase)
+            )
             return None
 
         if self._state.lease_token:
@@ -455,7 +506,7 @@ class FlowController:
 
         try:
             result = await executor.execute(input_data, llm_adapter, config)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.exception("Executor %s raised", name)
             result = ModuleResultEnvelope(
                 module_name=name,
@@ -495,7 +546,9 @@ class FlowController:
         allowed = TRANSITIONS.get(current, set())
         if target not in allowed:
             self._state.phase = Phase.ERROR
-            self._state.degradation_log.append(f"Invalid transition: {current.value} -> {target.value}")
+            self._state.degradation_log.append(
+                f"Invalid transition: {current.value} -> {target.value}"
+            )
             return
         self._log_event("transition", {"from": current.value, "to": target.value})
         self._state.phase = target
@@ -504,11 +557,25 @@ class FlowController:
         self._state.degraded_mode = True
         self._state.delivery_tier = delivery_tier
         self._state.degradation_log.append(reason)
-        self._emit_event("degraded", reason, phase=self._state.phase.value, status="degraded", meta={"delivery_tier": delivery_tier})
-        if Phase.DEGRADED in TRANSITIONS.get(self._state.phase, set()):
-            self._transition(Phase.DEGRADED)
+        self._emit_event(
+            "degraded",
+            reason,
+            phase=self._state.phase.value,
+            status="degraded",
+            meta={"delivery_tier": delivery_tier},
+        )
+
+        # 即使进入降级模式, 也必须先执行 PHASE_G (交付打包), 确保用户始终收到产出。
+        # 直接赋值绕过 TRANSITIONS 合法性校验, 因为任何阶段都应允许跳至打包兜底。
+        # PHASE_G 执行后会通过 _evaluate_edge 自行转入 DEGRADED, 符合状态机语义。
+        if self._state.phase != Phase.PHASE_G:
+            self._state.phase = Phase.PHASE_G
         else:
-            self._state.phase = Phase.DEGRADED
+            # 已在 PHASE_G 中出错, 直接降级, 避免无限循环
+            if Phase.DEGRADED in TRANSITIONS.get(self._state.phase, set()):
+                self._transition(Phase.DEGRADED)
+            else:
+                self._state.phase = Phase.DEGRADED
 
     def _store_result(self, executor_name: str, result: ModuleResultEnvelope) -> None:
         key_map = {
@@ -533,6 +600,7 @@ class FlowController:
         arts = self._state.phase_artifacts
 
         if executor_name == "NeedProfileBuilder":
+
             class RawInput(BaseModel):
                 raw_input: str
 
@@ -548,6 +616,7 @@ class FlowController:
             )
 
         if executor_name == "WorkerSupervisor":
+
             class PhaseCInput(BaseModel):
                 need_profile: NeedProfile
                 routing: RoutingDecision
@@ -584,7 +653,9 @@ class FlowController:
 
         if executor_name == "SynthesisRunner":
             need_profile = NeedProfile(**arts["need_profile"])
-            discovery = DiscoveryResult(**arts.get("discovery_result", {"candidates": [], "search_coverage": []}))
+            discovery = DiscoveryResult(
+                **arts.get("discovery_result", {"candidates": [], "search_coverage": []})
+            )
             extraction = arts.get("extraction_aggregate", {})
             project_summaries: list[ExtractedProjectSummary] = []
             for envelope in extraction.get("repo_envelopes", []):
@@ -596,9 +667,17 @@ class FlowController:
                     ExtractedProjectSummary(
                         project_id=envelope.get("repo_name", "unknown"),
                         repo={
-                            "repo_id": repo_meta.get("repo_id", envelope.get("worker_id", envelope.get("repo_name", "unknown"))),
-                            "full_name": repo_meta.get("full_name", envelope.get("repo_name", "unknown")),
-                            "url": repo_meta.get("url", envelope.get("repo_url", "https://github.com/unknown/unknown")),
+                            "repo_id": repo_meta.get(
+                                "repo_id",
+                                envelope.get("worker_id", envelope.get("repo_name", "unknown")),
+                            ),
+                            "full_name": repo_meta.get(
+                                "full_name", envelope.get("repo_name", "unknown")
+                            ),
+                            "url": repo_meta.get(
+                                "url",
+                                envelope.get("repo_url", "https://github.com/unknown/unknown"),
+                            ),
                             "default_branch": repo_meta.get("default_branch", "main"),
                             "commit_sha": repo_meta.get("commit_sha", "unknown"),
                             "local_path": repo_meta.get("local_path", ""),
@@ -634,7 +713,9 @@ class FlowController:
             need_profile = NeedProfile(**arts["need_profile"])
             synthesis = SynthesisReportData(**arts.get("synthesis_bundle", {}))
             validation = arts.get("validation_report", {})
-            target_sections = validation.get("repair_plan", []) if isinstance(validation, dict) else []
+            target_sections = (
+                validation.get("repair_plan", []) if isinstance(validation, dict) else []
+            )
             existing_sections = {}
             compile_bundle = arts.get("compile_bundle", {})
             if isinstance(compile_bundle, dict):
@@ -667,6 +748,7 @@ class FlowController:
             )
 
         if executor_name == "DeliveryPackager":
+
             class DeliveryInput(BaseModel):
                 phase_artifacts: dict[str, Any]
                 degraded_mode: bool
@@ -687,7 +769,7 @@ class FlowController:
             return None
         try:
             return CapabilityRouter.from_config("models.json")
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None
 
     def _build_llm_adapter(self, executor_name: str) -> object | None:
@@ -705,10 +787,12 @@ class FlowController:
         try:
             self._capability_router._current_stage = executor_name
             return self._capability_router.for_task(task)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None
 
-    def _build_need_profile_contract(self, profile: NeedProfile, routing: RoutingDecision) -> NeedProfileContract:
+    def _build_need_profile_contract(
+        self, profile: NeedProfile, routing: RoutingDecision
+    ) -> NeedProfileContract:
         domain_terms = list(dict.fromkeys(profile.relevance_terms or profile.keywords[:5]))
         success_criteria = [
             "交付可注入的 SKILL.md",
@@ -725,7 +809,9 @@ class FlowController:
             constraints=profile.constraints,
             success_criteria=success_criteria,
             max_projects=routing.max_repos,
-            delivery_expectation="full_skill" if routing.route != "LOW_CONFIDENCE" else "clarify_or_explore",
+            delivery_expectation="full_skill"
+            if routing.route != "LOW_CONFIDENCE"
+            else "clarify_or_explore",
             routing=routing,
         )
 
@@ -735,7 +821,7 @@ class FlowController:
         for warning in result.warnings or []:
             if warning.message.startswith("CLARIFY:"):
                 return warning.message.replace("CLARIFY:", "", 1).strip()
-        return "你更想分析具体项目，还是想让我先帮你找这个领域里最值得参考的项目？"
+        return "你更想分析具体项目,还是想让我先帮你找这个领域里最值得参考的项目?"
 
     def _load_accumulated_knowledge(self, domain: str) -> list[dict[str, Any]]:
         path = self._accumulated_file(domain)
@@ -767,7 +853,7 @@ class FlowController:
             statements.append(
                 {
                     "statement": statement,
-                    "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
                     "source_repo": ",".join(decision.get("source_refs", [])[:3]),
                     "source_commit": "",
                     "confidence": "medium",
@@ -826,9 +912,9 @@ class FlowController:
         messages = {
             Phase.INIT: "准备运行计划和目录结构",
             Phase.PHASE_A: "分析输入并确定路由路径",
-            Phase.PHASE_B: "执行发现阶段，寻找候选项目",
+            Phase.PHASE_B: "执行发现阶段, 寻找候选项目",
             Phase.PHASE_C: "并行提取候选项目的设计灵魂",
-            Phase.PHASE_D: "合成跨项目共识、分歧和编译摘要",
+            Phase.PHASE_D: "合成跨项目共识, 分歧和编译摘要",
             Phase.PHASE_E: "分 section 编译 SKILL 草稿",
             Phase.PHASE_F: "执行质量门禁并定位最弱 section",
             Phase.PHASE_G: "整理交付物并生成最终包",
@@ -837,19 +923,21 @@ class FlowController:
 
     def _phase_complete_message(self, phase: Phase) -> str:
         if phase == Phase.PHASE_C:
-            return f"提取完成：{self._state.successful_extractions} 个 repo 成功"
+            return f"提取完成: {self._state.successful_extractions} 个 repo 成功"
         if phase == Phase.PHASE_D:
             synthesis = self._state.phase_artifacts.get("synthesis_bundle", {})
             if isinstance(synthesis, dict):
                 why_count = len(synthesis.get("global_theses", []))
                 trap_count = len(synthesis.get("divergences", []))
-                return f"合成完成：{why_count} 条 WHY，共 {trap_count} 条风险/分歧"
+                return f"合成完成: {why_count} 条 WHY, 共 {trap_count} 条风险/分歧"
         if phase == Phase.PHASE_E:
             compile_bundle = self._state.phase_artifacts.get("compile_bundle", {})
             if isinstance(compile_bundle, dict):
-                return f"编译完成：{len(compile_bundle.get('section_drafts', {}))} 个 section 已生成"
+                return (
+                    f"编译完成: {len(compile_bundle.get('section_drafts', {}))} 个 section 已生成"
+                )
         if phase == Phase.PHASE_F:
-            return f"质量评分：{self._state.quality_score:.1f}/100"
+            return f"质量评分: {self._state.quality_score:.1f}/100"
         return f"{phase.value} completed"
 
     def _build_plan_preview(self) -> str:
@@ -864,7 +952,7 @@ class FlowController:
         )
 
     async def _send_progress(self, *, phase: str, status: str, message: str, percent: int) -> None:
-        try:
+        with contextlib.suppress(Exception):
             await self._adapter.send_progress(
                 ProgressUpdate(
                     phase=phase,
@@ -874,8 +962,6 @@ class FlowController:
                     percent_complete=percent,
                 )
             )
-        except Exception:  # noqa: BLE001
-            pass
 
     def _emit_event(
         self,
@@ -904,13 +990,13 @@ class FlowController:
             handle.flush()
             os.fsync(handle.fileno())
 
-    def _load_state(self, run_id: str) -> Optional[ControllerState]:
+    def _load_state(self, run_id: str) -> ControllerState | None:
         state_file = self._run_dir / "controller_state.json"
         if not state_file.exists():
             return None
         try:
             return ControllerState.from_dict(json.loads(state_file.read_text(encoding="utf-8")))
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None
 
     def _setup_directories(self) -> None:

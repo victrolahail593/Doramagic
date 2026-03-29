@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import time
-from pathlib import Path
 
-from pydantic import BaseModel
-
-from doramagic_contracts.base import DiscoveryCandidate
 from doramagic_community.github_search import search_github
+from doramagic_contracts.base import DiscoveryCandidate
 from doramagic_contracts.cross_project import DiscoveryInput, DiscoveryResult
 from doramagic_contracts.envelope import ErrorCodes, ModuleResultEnvelope, RunMetrics, WarningItem
+from pydantic import BaseModel
 
 MIN_STARS = 30
 
@@ -47,7 +45,11 @@ class DiscoveryRunner:
 
         for index, candidate in enumerate(filtered[: need.max_projects]):
             candidate.selected_for_phase_c = True
-            candidate.why_selected = candidate.why_selected or ("top targeted match" if routing and routing.route == "NAMED_PROJECT" else "top domain match")
+            candidate.why_selected = candidate.why_selected or (
+                "top targeted match"
+                if routing and routing.route == "NAMED_PROJECT"
+                else "top domain match"
+            )
             candidate.confidence = max(candidate.confidence, 0.9 if index == 0 else 0.72)
 
         result = DiscoveryResult(
@@ -59,7 +61,8 @@ class DiscoveryRunner:
             no_candidate_reason="" if filtered else "no relevant repositories found",
         )
 
-        status = "ok" if result.candidate_count > 0 else "blocked"
+        # D8: 0 候选时使用 degraded 而非 blocked, 保持与产品设计语义一致
+        status = "ok" if result.candidate_count > 0 else "degraded"
         if excluded:
             warnings.append(
                 WarningItem(
@@ -67,13 +70,15 @@ class DiscoveryRunner:
                     message=f"Filtered {len(excluded)} candidate(s) by relevance gate",
                 )
             )
-        if status == "blocked":
-            warnings.append(WarningItem(code="NO_RESULTS", message="Discovery found no relevant candidates"))
+        if status == "degraded":
+            warnings.append(
+                WarningItem(code="NO_RESULTS", message="Discovery found no relevant candidates")
+            )
 
         return ModuleResultEnvelope(
             module_name="DiscoveryRunner",
             status=status,
-            error_code=ErrorCodes.NO_CANDIDATES if status == "blocked" else None,
+            error_code=ErrorCodes.NO_CANDIDATES if status == "degraded" else None,
             warnings=warnings,
             data=result,
             metrics=RunMetrics(
@@ -113,7 +118,7 @@ class DiscoveryRunner:
         for query in queries[:3]:
             try:
                 results = search_github([query], top_k=max(4, limit))
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
             for repo in results:
                 full_name = repo.get("name", "")
@@ -158,7 +163,9 @@ class DiscoveryRunner:
             selected_for_phase_d=False,
         )
 
-    def _error(self, message: str, code: str, started: float) -> ModuleResultEnvelope[DiscoveryResult]:
+    def _error(
+        self, message: str, code: str, started: float
+    ) -> ModuleResultEnvelope[DiscoveryResult]:
         return ModuleResultEnvelope(
             module_name="DiscoveryRunner",
             status="error",

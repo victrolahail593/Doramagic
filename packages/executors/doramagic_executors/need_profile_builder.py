@@ -5,14 +5,12 @@ from __future__ import annotations
 import json
 import re
 import time
-from typing import Any
-
-from pydantic import BaseModel
 
 from doramagic_contracts.base import NeedProfile, SearchDirection
 from doramagic_contracts.envelope import ErrorCodes, ModuleResultEnvelope, RunMetrics, WarningItem
 from doramagic_contracts.executor import ExecutorConfig
 from doramagic_shared_utils.llm_adapter import LLMMessage
+from pydantic import BaseModel
 
 _SYSTEM = """You normalize Doramagic user input into a JSON profile.
 
@@ -33,6 +31,36 @@ _CN_HINTS: dict[str, tuple[list[str], str]] = {
     "密码": (["password manager", "credential vault", "secret storage"], "password management"),
     "wifi": (["wifi manager", "network credential", "wireless config"], "wifi tooling"),
     "阅读": (["reading tracker", "book notes", "library app"], "reading workflow"),
+    # 语言学习 / 英语
+    "英语": (
+        ["english learning app", "vocabulary trainer", "language learning tool"],
+        "language learning",
+    ),
+    "语言": (
+        ["language learning app", "vocabulary flashcard", "language practice"],
+        "language learning",
+    ),
+    "单词": (["vocabulary trainer", "flashcard app", "spaced repetition"], "vocabulary learning"),
+    "口语": (
+        ["speaking practice app", "pronunciation trainer", "english conversation"],
+        "language learning",
+    ),
+    # 健康 / 运动
+    "健康": (["health tracker", "wellness app", "fitness tool"], "health & fitness"),
+    "运动": (["fitness tracker", "workout planner", "exercise logger"], "fitness"),
+    "跑步": (["running tracker", "jogging app", "run logger"], "fitness"),
+    # 旅行 / 旅居
+    "旅行": (["travel planner", "trip organizer", "itinerary tool"], "travel"),
+    "旅居": (["digital nomad tool", "long-stay planner", "expat app"], "travel"),
+    # 理财 / 投资
+    "理财": (["personal finance", "investment tracker", "wealth manager"], "personal finance"),
+    "投资": (["investment portfolio", "stock tracker", "finance dashboard"], "finance"),
+    # 待办 / 任务
+    "待办": (["todo app", "task manager", "productivity tool"], "productivity"),
+    "任务": (["task manager", "project planner", "kanban board"], "productivity"),
+    # 笔记 / 知识管理
+    "笔记": (["note-taking app", "knowledge base", "markdown editor"], "note taking"),
+    "知识": (["knowledge management", "personal wiki", "second brain"], "knowledge management"),
 }
 _STOPWORDS = {"帮我", "做", "一个", "工具", "app", "skill", "系统", "东西"}
 _URL_PATTERN = re.compile(r"https?://(?:github|gitlab|gitee)\.com/[\w.-]+/[\w.-]+/?")
@@ -53,7 +81,7 @@ class NeedProfileBuilder:
         if adapter is not None:
             try:
                 profile = await self._build_with_llm(raw, adapter)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 profile = None
         if profile is None:
             profile = self._build_heuristic(raw)
@@ -64,7 +92,12 @@ class NeedProfileBuilder:
             warnings.append(
                 WarningItem(
                     code="CLARIFY",
-                    message="CLARIFY:" + (profile.questions[0] if profile.questions else "你想分析具体项目，还是先找这个领域的最佳开源项目？"),
+                    message="CLARIFY:"
+                    + (
+                        profile.questions[0]
+                        if profile.questions
+                        else "你想分析具体项目,还是先找这个领域的最佳开源项目?"
+                    ),
                 )
             )
 
@@ -131,12 +164,15 @@ class NeedProfileBuilder:
         questions: list[str] = []
         if confidence < 0.7:
             questions = [
-                "你是想让我直接分析某个现有项目，还是先帮你找这个领域里最值得参考的开源项目？",
-                "如果有目标项目，请直接给 GitHub URL 或项目名。",
+                "你是想让我直接分析某个现有项目,还是先帮你找这个领域里最值得参考的开源项目?",
+                "如果有目标项目,请直接给 GitHub URL 或项目名。",
             ]
 
-        domain = matched_domains[0] if matched_domains else ("named project" if has_slug else "general")
-        github_queries = keywords[:3]
+        domain = (
+            matched_domains[0] if matched_domains else ("named project" if has_slug else "general")
+        )
+        # 将中文关键词改写为英文 GitHub 搜索词, 避免中文碎片直接进入搜索查询
+        github_queries = self._rewrite_queries_for_github(keywords, raw)
         return NeedProfile(
             raw_input=raw,
             keywords=keywords[:8],
@@ -155,6 +191,52 @@ class NeedProfileBuilder:
             questions=questions,
             max_projects=1 if has_url else 3,
         )
+
+    def _rewrite_queries_for_github(self, keywords: list[str], raw: str) -> list[str]:
+        """将原始关键词列表改写为适合 GitHub 搜索的英文词组。
+
+        当输入以中文为主时, 直接使用中文碎片作为 GitHub 查询词效果极差。
+        本方法优先使用 _CN_HINTS 中预设的英文翻译, 补充原始列表中已有的英文词。
+        不调用 LLM, 仅做启发式映射, 保持低成本。
+
+        Args:
+            keywords: _fallback_keywords 已提取的原始关键词列表。
+            raw: 用户原始输入字符串。
+
+        Returns:
+            最多 3 条适合 GitHub 搜索的英文查询词列表。
+        """
+        # 判断输入是否以中文为主 (中文字符占比超过 30%)
+        cn_chars = len(re.findall(r"[\u4e00-\u9fff]", raw))
+        is_mainly_chinese = cn_chars > len(raw) * 0.3
+
+        if not is_mainly_chinese:
+            # 非中文输入直接用原始关键词, 最多取前 3 条
+            return keywords[:3]
+
+        en_queries: list[str] = []
+        seen: set[str] = set()
+
+        # 第一轮: 从 _CN_HINTS 中找到匹配的英文查询词 (保留语义最强的翻译)
+        for hint_key, (translations, _) in _CN_HINTS.items():
+            if hint_key in raw:
+                for term in translations[:2]:  # 每个关键词最多取 2 条翻译
+                    if term not in seen:
+                        en_queries.append(term)
+                        seen.add(term)
+                if len(en_queries) >= 3:
+                    break
+
+        # 第二轮: 补充原始关键词中已是英文的词 (e.g. "app", 项目名)
+        for kw in keywords:
+            if len(en_queries) >= 3:
+                break
+            if re.match(r"^[a-zA-Z][a-zA-Z0-9 _-]{1,}$", kw) and kw not in seen:
+                en_queries.append(kw)
+                seen.add(kw)
+
+        # 兜底: 如果完全没有匹配, 回退到原始关键词 (保证不返回空列表)
+        return en_queries[:3] if en_queries else keywords[:3]
 
     def _fallback_keywords(self, raw: str) -> list[str]:
         keywords: list[str] = []
