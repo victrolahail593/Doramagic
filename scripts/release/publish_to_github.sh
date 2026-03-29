@@ -241,3 +241,42 @@ echo "════════════════════════�
 cd "$PROJECT_ROOT"
 git tag "$VERSION" 2>/dev/null && echo "  ✓ Tagged $VERSION in local repo" || echo "  ⚠ Tag $VERSION already exists locally"
 git push origin "$VERSION" 2>/dev/null && echo "  ✓ Pushed tag to Gitea" || echo "  ⚠ Could not push tag to Gitea"
+
+# ─── Step 8: Publish to ClawHub ─────────────────────────────────
+
+echo ""
+echo "▶ Step 8: Publish to ClawHub"
+
+SEMVER="${VERSION#v}"  # strip leading 'v' for clawhub (12.3.0 not v12.3.0)
+SKILL_DIR="$PROJECT_ROOT/skills/doramagic"
+
+if [[ ! -d "$SKILL_DIR" ]]; then
+    echo "  ⚠ skills/doramagic not found, skipping ClawHub publish"
+else
+    if command -v npx &>/dev/null; then
+        echo "  Publishing dora@$SEMVER to ClawHub..."
+        npx clawhub@latest publish "$SKILL_DIR" \
+            --slug dora \
+            --name "Doramagic" \
+            --version "$SEMVER" \
+            --changelog "Release $VERSION" \
+            --tags latest 2>&1 | tail -3
+
+        if [[ $? -eq 0 ]]; then
+            echo "  ✓ Published dora@$SEMVER to ClawHub"
+            echo "  Note: skill may be hidden for a few minutes during security scan"
+        else
+            echo "  ⚠ ClawHub publish failed (non-blocking, GitHub release is still live)"
+        fi
+    else
+        echo "  ⚠ npx not found, skipping ClawHub publish"
+        echo "  Manual: npx clawhub@latest publish skills/doramagic --slug dora --version $SEMVER"
+    fi
+fi
+
+echo ""
+echo "═══════════════════════════════════════════"
+echo "  Release $VERSION complete"
+echo "  GitHub: https://github.com/tangweigang-jpg/Doramagic/releases/tag/$VERSION"
+echo "  ClawHub: https://clawhub.ai/skills/dora"
+echo "═══════════════════════════════════════════"
