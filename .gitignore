@@ -85,3 +85,11 @@ scripts/dev/capture_eval_baseline.py
 .gstack/
 openclaw-test/
 models.json
+
+# Web/design assets
+web/
+
+# skills 打包副本中的测试（源码在 packages/*/tests/）
+skills/doramagic/packages/*/tests/
+skills/doramagic-s1/packages/*/tests/
+skills/doramagic-s2/packages/*/tests/
