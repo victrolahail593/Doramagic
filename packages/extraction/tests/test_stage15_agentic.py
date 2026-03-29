@@ -7,7 +7,6 @@ Tests validate the contract: hypotheses → claims with file:line evidence.
 from __future__ import annotations
 
 import json
-import sys
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -17,15 +16,6 @@ from pathlib import Path
 _THIS_DIR = Path(__file__).resolve().parent
 _RACE_ROOT = _THIS_DIR.parent
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent  # -> Doramagic/
-
-for _p in [
-    str(_REPO_ROOT / "packages" / "contracts"),
-    str(_REPO_ROOT / "packages" / "shared_utils"),
-    str(_REPO_ROOT / "packages" / "extraction"),
-    str(_RACE_ROOT),
-]:
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
 
 from doramagic_contracts.base import EvidenceRef  # noqa: E402
 from doramagic_contracts.envelope import ErrorCodes  # noqa: E402

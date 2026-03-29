@@ -17,10 +17,6 @@ from doramagic_contracts.envelope import ModuleResultEnvelope, RunMetrics, Warni
 from doramagic_contracts.executor import ExecutorConfig, PhaseExecutor
 from doramagic_contracts.skill import CompileBundleContract
 
-_SHARED_UTILS_DIR = Path(__file__).resolve().parents[2] / "shared_utils"
-if str(_SHARED_UTILS_DIR) not in sys.path:
-    sys.path.insert(0, str(_SHARED_UTILS_DIR))
-
 _BRICK_STITCHER_PATH = (
     Path(__file__).resolve().parents[2] / "executors" / "doramagic_executors" / "brick_stitcher.py"
 )
@@ -473,7 +469,9 @@ class FlowController:
     async def _probe_brick_coverage(self, profile: NeedProfile) -> dict[str, Any]:
         bricks_dir = self._brick_catalog_dir()
         try:
-            matches = await match_brick_categories(profile.intent or profile.raw_input, profile.domain, self._adapter)
+            matches = await match_brick_categories(
+                profile.intent or profile.raw_input, profile.domain, self._adapter
+            )
             selected = select_bricks(matches, bricks_dir, max_bricks=1000)
         except Exception as exc:
             logger.warning("Brick coverage probe failed: %s", exc)

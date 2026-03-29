@@ -3,33 +3,24 @@
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from unittest.mock import patch
 
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
-for _p in [
-    str(_REPO_ROOT / "packages" / "contracts"),
-    str(_REPO_ROOT / "packages" / "shared_utils"),
-    str(_REPO_ROOT / "packages" / "extraction"),
-]:
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-
-from doramagic_contracts.extraction import (  # noqa: E402
+from doramagic_contracts.envelope import ModuleResultEnvelope, RunMetrics
+from doramagic_contracts.extraction import (
     Stage15AgenticInput,
     Stage15Budget,
     Stage15Toolset,
 )
-from doramagic_contracts.envelope import ModuleResultEnvelope, RunMetrics  # noqa: E402
-from doramagic_extraction import stage15_agentic as stage15_module  # noqa: E402
-from doramagic_extraction.stage15_agentic import (  # noqa: E402
+from doramagic_extraction import stage15_agentic as stage15_module
+from doramagic_extraction.stage15_agentic import (
     resolve_stage15_agentic_strategy,
     run_stage15_agentic,
 )
-from doramagic_shared_utils.llm_adapter import LLMAdapter, MockLLMAdapter  # noqa: E402
+from doramagic_shared_utils.llm_adapter import LLMAdapter, MockLLMAdapter
 
 FIXTURES_DIR = _REPO_ROOT / "data" / "fixtures"
 
@@ -82,14 +73,17 @@ def test_google_provider_routes_to_gemini_strategy(tmp_path: Path) -> None:
         ),
     )
 
-    with patch.object(
-        stage15_module._GeminiStage15AgenticStrategy,
-        "run",
-        return_value=dummy_result,
-    ) as gemini_run, patch.object(
-        stage15_module._Stage15AgenticStrategy,
-        "run",
-        side_effect=AssertionError("default strategy should not be used"),
+    with (
+        patch.object(
+            stage15_module._GeminiStage15AgenticStrategy,
+            "run",
+            return_value=dummy_result,
+        ) as gemini_run,
+        patch.object(
+            stage15_module._Stage15AgenticStrategy,
+            "run",
+            side_effect=AssertionError("default strategy should not be used"),
+        ),
     ):
         result = run_stage15_agentic(input_data, adapter=adapter)
 
@@ -117,14 +111,17 @@ def test_mock_provider_routes_to_default_strategy(tmp_path: Path) -> None:
         ),
     )
 
-    with patch.object(
-        stage15_module._Stage15AgenticStrategy,
-        "run",
-        return_value=dummy_result,
-    ) as default_run, patch.object(
-        stage15_module._GeminiStage15AgenticStrategy,
-        "run",
-        side_effect=AssertionError("gemini strategy should not be used"),
+    with (
+        patch.object(
+            stage15_module._Stage15AgenticStrategy,
+            "run",
+            return_value=dummy_result,
+        ) as default_run,
+        patch.object(
+            stage15_module._GeminiStage15AgenticStrategy,
+            "run",
+            side_effect=AssertionError("gemini strategy should not be used"),
+        ),
     ):
         result = run_stage15_agentic(input_data, adapter=adapter)
 

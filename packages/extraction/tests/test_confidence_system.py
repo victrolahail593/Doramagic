@@ -5,14 +5,11 @@ Run with:  pytest tests/test_confidence_system.py -v
 """
 
 import os
-import sys
 
 # Allow running from any working directory
 _REPO_ROOT = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 )
-sys.path.insert(0, os.path.join(_REPO_ROOT, "packages", "extraction"))
-sys.path.insert(0, os.path.join(_REPO_ROOT, "packages", "contracts"))
 
 from doramagic_extraction.confidence_system import (
     _path_contains_doc_keyword,

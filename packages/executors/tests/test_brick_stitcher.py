@@ -5,8 +5,8 @@
 
 from __future__ import annotations
 
-import json
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -16,19 +16,8 @@ from pathlib import Path
 _THIS_DIR = Path(__file__).resolve().parent
 _PACKAGES_DIR = _THIS_DIR.parent.parent
 
-for _p in [
-    str(_PACKAGES_DIR / "contracts"),
-    str(_PACKAGES_DIR / "executors"),
-]:
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-
-_BRICK_STITCHER_PATH = (
-    _PACKAGES_DIR / "executors" / "doramagic_executors" / "brick_stitcher.py"
-)
-_spec = importlib.util.spec_from_file_location(
-    "test_brick_stitcher_module", _BRICK_STITCHER_PATH
-)
+_BRICK_STITCHER_PATH = _PACKAGES_DIR / "executors" / "doramagic_executors" / "brick_stitcher.py"
+_spec = importlib.util.spec_from_file_location("test_brick_stitcher_module", _BRICK_STITCHER_PATH)
 assert _spec is not None and _spec.loader is not None
 _module = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = _module

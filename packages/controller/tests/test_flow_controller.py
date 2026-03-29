@@ -6,27 +6,12 @@ All external platform and executor dependencies are mocked.
 from __future__ import annotations
 
 import asyncio
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-# ---------------------------------------------------------------------------
-# sys.path: allow running from any working directory
-# ---------------------------------------------------------------------------
-_THIS_DIR = Path(__file__).resolve().parent
-_PACKAGES_DIR = _THIS_DIR.parent.parent
-
-for _p in [
-    str(_PACKAGES_DIR / "contracts"),
-    str(_PACKAGES_DIR / "controller"),
-]:
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-
-from doramagic_contracts.base import (  # noqa: E402
+from doramagic_contracts.base import (
     CandidateQualitySignals,
     DiscoveryCandidate,
     ExtractionAggregateContract,
@@ -35,22 +20,22 @@ from doramagic_contracts.base import (  # noqa: E402
     RoutingDecision,
     SearchDirection,
 )
-from doramagic_contracts.cross_project import (  # noqa: E402
+from doramagic_contracts.cross_project import (
     DiscoveryResult,
     SynthesisDecision,
     SynthesisReportData,
 )
-from doramagic_contracts.envelope import ModuleResultEnvelope, RunMetrics  # noqa: E402
-from doramagic_contracts.skill import (  # noqa: E402
+from doramagic_contracts.envelope import ModuleResultEnvelope, RunMetrics
+from doramagic_contracts.skill import (
     CompileBundleContract,
     DeliveryManifest,
     PlatformRules,
     ValidationCheck,
     ValidationReport,
 )
-from doramagic_controller.flow_controller import FlowController  # noqa: E402
-from doramagic_controller.flow_controller_state import ControllerState  # noqa: E402
-from doramagic_controller.state_definitions import Phase  # noqa: E402
+from doramagic_controller.flow_controller import FlowController
+from doramagic_controller.flow_controller_state import ControllerState
+from doramagic_controller.state_definitions import Phase
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO_ROOT / "packages" / "racekit"))
 
 from doramagic_racekit import (
     ROUND_RACE_CONFIGS,

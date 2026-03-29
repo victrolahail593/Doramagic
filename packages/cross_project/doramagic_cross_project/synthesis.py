@@ -7,6 +7,7 @@ import json
 import os
 import tempfile
 import time
+from pathlib import Path
 
 from doramagic_contracts.base import Priority
 from doramagic_contracts.cross_project import (

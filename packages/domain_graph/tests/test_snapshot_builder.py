@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(PROJECT_ROOT / "packages" / "contracts"))
-sys.path.insert(0, str(PROJECT_ROOT / "packages" / "domain_graph"))
 
 from doramagic_contracts.domain_graph import DomainSnapshot, SnapshotBuilderInput  # noqa: E402
 from doramagic_contracts.envelope import ErrorCodes  # noqa: E402

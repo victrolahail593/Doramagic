@@ -2,17 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
-from pathlib import Path
 from typing import Any
-
-from pydantic import BaseModel
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-for pkg_dir in (PROJECT_ROOT / "packages").iterdir():
-    if pkg_dir.is_dir() and not pkg_dir.name.startswith((".", "_")):
-        if str(pkg_dir) not in sys.path:
-            sys.path.insert(0, str(pkg_dir))
 
 from doramagic_contracts.adapter import ClarificationRequest, ProgressUpdate
 from doramagic_contracts.base import (
@@ -34,6 +24,7 @@ from doramagic_executors.need_profile_builder import NeedProfileBuilder
 from doramagic_executors.skill_compiler_executor import SkillCompilerExecutor
 from doramagic_executors.synthesis_runner import SynthesisRunner
 from doramagic_executors.validator_executor import ValidatorExecutor
+from pydantic import BaseModel
 
 
 def _metrics() -> RunMetrics:

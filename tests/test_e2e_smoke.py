@@ -13,19 +13,11 @@ without actually calling GitHub API or LLM. All external calls are mocked.
 from __future__ import annotations
 
 import json
-import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
-# Add packages to path
-_root = Path(__file__).resolve().parent.parent
-for pkg_dir in (_root / "packages").iterdir():
-    if pkg_dir.is_dir():
-        sys.path.insert(0, str(pkg_dir))
-
 
 # --- Helpers ---
 

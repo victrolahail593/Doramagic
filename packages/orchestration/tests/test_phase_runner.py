@@ -10,22 +10,11 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-
-# ---------------------------------------------------------------------------
-# Make phase_runner importable regardless of working directory
-# ---------------------------------------------------------------------------
-
-_THIS_DIR = Path(__file__).resolve().parent
-_RUNNER_DIR = _THIS_DIR.parent
-if str(_RUNNER_DIR) not in sys.path:
-    sys.path.insert(0, str(_RUNNER_DIR))
-
-from doramagic_orchestration.phase_runner import (  # noqa: E402
+from doramagic_orchestration.phase_runner import (
     PipelineConfig,
     PipelineResult,
     _load_cards_as_dicts,

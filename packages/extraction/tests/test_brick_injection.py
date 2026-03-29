@@ -12,20 +12,15 @@
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 import pytest
 
-# --- 路径设置 ---
+# _S1_DIR is used by the real_bricks_dir fixture to locate the bricks/ directory
 _TESTS_DIR = Path(__file__).parent.resolve()
 _S1_DIR = _TESTS_DIR.parent
 
-# 将 s1-sonnet 目录加入 sys.path，以便直接 import brick_injection
-if str(_S1_DIR) not in sys.path:
-    sys.path.insert(0, str(_S1_DIR))
-
-from doramagic_extraction.brick_injection import (  # noqa: E402
+from doramagic_extraction.brick_injection import (
     BrickInjectionResult,
     _generate_injection_text,
     _load_bricks_from_file,

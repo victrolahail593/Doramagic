@@ -3,17 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 # Add packages to path for direct test execution.
 _root = Path(__file__).resolve().parent.parent.parent.parent
-for pkg_dir in (_root / "packages").iterdir():
-    if pkg_dir.is_dir():
-        sys.path.insert(0, str(pkg_dir))
-
 from doramagic_contracts.base import NeedProfile
 from doramagic_contracts.cross_project import (
     CommunityKnowledge,
@@ -50,8 +45,7 @@ def _need_profile() -> NeedProfile:
 
 
 def _discovery_input() -> object:
-    from doramagic_contracts.cross_project import DiscoveryConfig
-    from doramagic_contracts.cross_project import DiscoveryInput
+    from doramagic_contracts.cross_project import DiscoveryConfig, DiscoveryInput
 
     return DiscoveryInput(
         need_profile=_need_profile(),
@@ -159,7 +153,9 @@ class TestProgressEvents:
         async def _fake_quality_filter(adapter, intent, domain, real_decisions):
             return real_decisions[:1], 1, 10, 5
 
-        with patch.object(runner, "_llm_quality_filter", new=AsyncMock(side_effect=_fake_quality_filter)):
+        with patch.object(
+            runner, "_llm_quality_filter", new=AsyncMock(side_effect=_fake_quality_filter)
+        ):
             asyncio.run(runner.execute(_synthesis_input(), adapter=object(), config=config))
 
         bus.emit.assert_called_once()

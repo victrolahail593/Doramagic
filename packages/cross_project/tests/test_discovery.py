@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from doramagic_contracts.base import NeedProfile, SearchDirection
 from doramagic_contracts.cross_project import (

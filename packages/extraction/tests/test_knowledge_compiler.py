@@ -12,13 +12,10 @@ import json
 # ---------------------------------------------------------------------------
 # Import the module under test
 # ---------------------------------------------------------------------------
-import sys
 import textwrap
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-sys.path.insert(0, str(_REPO_ROOT / "packages" / "extraction"))
-sys.path.insert(0, str(_REPO_ROOT / "packages" / "contracts"))
 
 from doramagic_extraction.knowledge_compiler import (
     DEFAULT_BUDGET,

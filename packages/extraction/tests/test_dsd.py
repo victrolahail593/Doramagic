@@ -11,13 +11,10 @@ Run with:  pytest tests/test_dsd.py -v
 """
 
 import os
-import sys
 
 _REPO_ROOT = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 )
-sys.path.insert(0, os.path.join(_REPO_ROOT, "packages", "extraction"))
-sys.path.insert(0, os.path.join(_REPO_ROOT, "packages", "contracts"))
 
 import pytest
 from doramagic_extraction.deceptive_source_detection import (

@@ -23,13 +23,13 @@ from doramagic_contracts.base import (
     DiscoveryCandidate,
     SearchCoverageItem,
 )
-from doramagic_contracts.cross_project import (  # noqa: E402
+from doramagic_contracts.cross_project import (
     ApiDomainHint,
     DiscoveryConfig,
     DiscoveryInput,
     DiscoveryResult,
 )
-from doramagic_contracts.envelope import (  # noqa: E402
+from doramagic_contracts.envelope import (
     ErrorCodes,
     ModuleResultEnvelope,
     RunMetrics,

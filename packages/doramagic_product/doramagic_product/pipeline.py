@@ -33,7 +33,7 @@ from doramagic_contracts.base import (
     SearchCoverageItem,
     SearchDirection,
 )
-from doramagic_contracts.cross_project import (  # noqa: E402
+from doramagic_contracts.cross_project import (
     CommunityKnowledge,
     CommunityKnowledgeItem,
     CompareConfig,
@@ -47,17 +47,17 @@ from doramagic_contracts.cross_project import (  # noqa: E402
     SynthesisInput,
     SynthesisReportData,
 )
-from doramagic_contracts.skill import (  # noqa: E402
+from doramagic_contracts.skill import (
     PlatformRules,
     SkillBundlePaths,
     SkillCompilerInput,
     ValidationInput,
 )
-from doramagic_cross_project.compare import run_compare  # noqa: E402
-from doramagic_cross_project.discovery import run_discovery  # noqa: E402
-from doramagic_cross_project.synthesis import run_synthesis  # noqa: E402
-from doramagic_platform_openclaw.validator import run_validation  # noqa: E402
-from doramagic_skill_compiler.compiler import run_skill_compiler  # noqa: E402
+from doramagic_cross_project.compare import run_compare
+from doramagic_cross_project.discovery import run_discovery
+from doramagic_cross_project.synthesis import run_synthesis
+from doramagic_platform_openclaw.validator import run_validation
+from doramagic_skill_compiler.compiler import run_skill_compiler
 
 SEARCH_API_URL = "https://api.github.com/search/repositories"
 CODELOAD_URL = "https://codeload.github.com/{owner}/{repo}/zip/refs/heads/{branch}"

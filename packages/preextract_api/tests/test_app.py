@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from pathlib import Path
 
 import pytest
@@ -14,8 +13,6 @@ from fastapi.testclient import TestClient
 
 # 插入依赖路径
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(_PROJECT_ROOT / "packages" / "contracts"))
-sys.path.insert(0, str(_PROJECT_ROOT / "packages" / "preextract_api"))
 
 # 设置环境变量以指向正确的测试数据
 os.environ["DORAMAGIC_API_DATA_DIR"] = "data/fixtures/snapshots"

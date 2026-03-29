@@ -10,6 +10,7 @@ import time
 from collections import Counter
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
+from pathlib import Path
 
 from doramagic_contracts.base import EvidenceRef, KnowledgeAtom, ProjectFingerprint
 from doramagic_contracts.cross_project import (

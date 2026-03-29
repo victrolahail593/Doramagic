@@ -7,16 +7,9 @@
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 import pytest
-
-# 引用 contracts 包
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "packages" / "contracts"))
-# 引用 extraction 包
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 from doramagic_contracts.extraction import RepoFacts
 from doramagic_extraction.stage0 import extract_repo_facts
 

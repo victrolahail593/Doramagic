@@ -2,18 +2,9 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import pytest
-
-_THIS_DIR = Path(__file__).resolve().parent
-_SHARED_UTILS_DIR = _THIS_DIR.parent
-if str(_SHARED_UTILS_DIR) not in sys.path:
-    sys.path.insert(0, str(_SHARED_UTILS_DIR))
-
-from doramagic_shared_utils import llm_adapter as llm_adapter_module  # noqa: E402
-from doramagic_shared_utils.llm_adapter import LLMAdapter, LLMMessage, LLMResponse  # noqa: E402
+from doramagic_shared_utils import llm_adapter as llm_adapter_module
+from doramagic_shared_utils.llm_adapter import LLMAdapter, LLMMessage, LLMResponse
 
 
 class FakeHttpError(Exception):

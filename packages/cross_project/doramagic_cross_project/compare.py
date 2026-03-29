@@ -10,6 +10,7 @@ import tempfile
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 from doramagic_contracts.base import EvidenceRef, KnowledgeAtom, ProjectFingerprint
 from doramagic_contracts.cross_project import (
