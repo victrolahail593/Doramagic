@@ -25,6 +25,7 @@ def store_result(state: ControllerState, executor_name: str, result: ModuleResul
     key_map = {
         "NeedProfileBuilder": "need_profile",
         "DiscoveryRunner": "discovery_result",
+        "BrickStitcher": "brick_stitch_result",
         "WorkerSupervisor": "extraction_aggregate",
         "SynthesisRunner": "synthesis_bundle",
         "SkillCompiler": "compile_bundle",
@@ -45,6 +46,7 @@ def infer_delivery_tier(phase: Phase, current_tier: str) -> str:
     """根据失败的阶段推断降级交付层级。"""
     mapping = {
         Phase.PHASE_B: "candidate_brief",
+        Phase.BRICK_STITCH: "draft_skill",
         Phase.PHASE_C: "repo_reports",
         Phase.PHASE_D: "repo_reports",
         Phase.PHASE_E: "synthesis_pack",
@@ -75,6 +77,7 @@ def phase_progress_pct(phase: Phase) -> int:
         Phase.PHASE_A: 5,
         Phase.PHASE_A_CLARIFY: 10,
         Phase.PHASE_B: 18,
+        Phase.BRICK_STITCH: 28,
         Phase.PHASE_C: 42,
         Phase.PHASE_D: 60,
         Phase.PHASE_E: 76,
@@ -92,6 +95,7 @@ def phase_start_message(phase: Phase) -> str:
         Phase.INIT: "准备运行计划和目录结构",
         Phase.PHASE_A: "分析输入并确定路由路径",
         Phase.PHASE_B: "执行发现阶段, 寻找候选项目",
+        Phase.BRICK_STITCH: "检查积木覆盖率并执行直缝",
         Phase.PHASE_C: "并行提取候选项目的设计灵魂",
         Phase.PHASE_D: "合成跨项目共识, 分歧和编译摘要",
         Phase.PHASE_E: "分 section 编译 SKILL 草稿",
@@ -105,6 +109,13 @@ def phase_complete_message(phase: Phase, state: ControllerState) -> str:
     """返回阶段完成消息（中文）。"""
     if phase == Phase.PHASE_C:
         return f"提取完成: {state.successful_extractions} 个 repo 成功"
+    if phase == Phase.BRICK_STITCH:
+        brick_stitch = state.phase_artifacts.get("brick_stitch_result", {})
+        if isinstance(brick_stitch, dict):
+            return (
+                f"直缝完成: {brick_stitch.get('bricks_used', 0)} 个积木, "
+                f"{len(brick_stitch.get('categories_matched', []))} 个类别"
+            )
     if phase == Phase.PHASE_D:
         synthesis = state.phase_artifacts.get("synthesis_bundle", {})
         if isinstance(synthesis, dict):

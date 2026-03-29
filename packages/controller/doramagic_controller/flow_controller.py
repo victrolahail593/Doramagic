@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import contextlib
+import importlib.util
 import logging
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -13,6 +15,27 @@ from doramagic_contracts.base import NeedProfile, RoutingDecision
 from doramagic_contracts.budget import BudgetPolicy
 from doramagic_contracts.envelope import ModuleResultEnvelope, RunMetrics, WarningItem
 from doramagic_contracts.executor import ExecutorConfig, PhaseExecutor
+from doramagic_contracts.skill import CompileBundleContract
+
+_SHARED_UTILS_DIR = Path(__file__).resolve().parents[2] / "shared_utils"
+if str(_SHARED_UTILS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SHARED_UTILS_DIR))
+
+_BRICK_STITCHER_PATH = (
+    Path(__file__).resolve().parents[2] / "executors" / "doramagic_executors" / "brick_stitcher.py"
+)
+_brick_stitcher_spec = importlib.util.spec_from_file_location(
+    "doramagic_controller._brick_stitcher", _BRICK_STITCHER_PATH
+)
+if _brick_stitcher_spec is None or _brick_stitcher_spec.loader is None:
+    raise ImportError(f"Unable to load brick stitcher from {_BRICK_STITCHER_PATH}")
+_brick_stitcher_module = importlib.util.module_from_spec(_brick_stitcher_spec)
+sys.modules[_brick_stitcher_spec.name] = _brick_stitcher_module
+_brick_stitcher_spec.loader.exec_module(_brick_stitcher_module)
+
+match_brick_categories = _brick_stitcher_module.match_brick_categories
+run_brick_stitch = _brick_stitcher_module.run_brick_stitch
+select_bricks = _brick_stitcher_module.select_bricks
 
 from .budget_manager import BudgetManager
 from .event_bus import EventBus
@@ -49,6 +72,7 @@ from .state_definitions import (
     MAX_REVISE_LOOPS,
     PHASE_EXECUTOR_MAP,
     TRANSITIONS,
+    EdgeContext,
     Phase,
 )
 
@@ -147,6 +171,8 @@ class FlowController:
             self._transition(self._evaluate_edge(Phase.INIT))
         elif phase == Phase.PHASE_A:
             await self._handle_phase_a()
+        elif phase == Phase.BRICK_STITCH:
+            await self._handle_brick_stitch()
         else:
             await self._dispatch_executor(phase)
 
@@ -219,7 +245,64 @@ class FlowController:
             save_state(self._state, self._run_dir)
             return
 
+        if routing.route == "DOMAIN_EXPLORE":
+            coverage = await self._probe_brick_coverage(profile)
+            self._state.phase_artifacts["brick_coverage"] = coverage
+
         self._transition(self._evaluate_edge(Phase.PHASE_A))
+
+    async def _handle_brick_stitch(self) -> None:
+        profile = self._get_need_profile()
+        if profile is None:
+            self._state.phase = Phase.ERROR
+            self._state.degradation_log.append("Missing need profile for brick stitching")
+            return
+
+        coverage = self._state.phase_artifacts.get("brick_coverage", {})
+        bricks_dir = self._brick_catalog_dir()
+        result = await run_brick_stitch(
+            intent=profile.intent or profile.raw_input,
+            domain=profile.domain,
+            adapter=self._adapter,
+            bricks_dir=bricks_dir,
+            output_dir=self._run_dir,
+        )
+        store_result(self._state, "BrickStitcher", result)
+
+        delivery_dir = self._run_dir / "delivery"
+        skill_md = delivery_dir / "SKILL.md"
+        readme_md = delivery_dir / "README.md"
+        provenance_md = delivery_dir / "PROVENANCE.md"
+        limitations_md = delivery_dir / "LIMITATIONS.md"
+        skill_text = skill_md.read_text(encoding="utf-8") if skill_md.exists() else ""
+
+        self._state.phase_artifacts["compile_bundle"] = CompileBundleContract(
+            section_drafts={"SKILL.md": skill_text} if skill_text else {},
+            full_draft=skill_text,
+            artifact_paths={
+                "SKILL.md": str(skill_md),
+                "README.md": str(readme_md),
+                "PROVENANCE.md": str(provenance_md),
+                "LIMITATIONS.md": str(limitations_md),
+            },
+        ).model_dump()
+        self._state.phase_artifacts["brick_stitch_result"] = result.data
+
+        if result.status == "error" or result.data is None:
+            self._state.phase = Phase.ERROR
+            self._state.degradation_log.append(
+                f"BrickStitcher failed: {result.error_code or 'unknown'}"
+            )
+            return
+
+        if result.status != "ok":
+            self._state.degradation_log.append(
+                f"BrickStitcher returned {result.status}; continuing to Validator"
+            )
+        if coverage:
+            self._state.phase_artifacts["brick_coverage"] = coverage
+
+        self._transition(Phase.PHASE_F)
 
     async def _dispatch_executor(self, phase: Phase) -> None:
         executor_name = PHASE_EXECUTOR_MAP.get(phase)
@@ -360,11 +443,91 @@ class FlowController:
     # State machine
     # ------------------------------------------------------------------
 
+    def _get_need_profile(self) -> NeedProfile | None:
+        arts = self._state.phase_artifacts
+        raw_profile = arts.get("need_profile")
+        if isinstance(raw_profile, NeedProfile):
+            return raw_profile
+        if isinstance(raw_profile, dict):
+            with contextlib.suppress(Exception):
+                return NeedProfile(**raw_profile)
+        raw_contract = arts.get("need_profile_contract")
+        if isinstance(raw_contract, dict):
+            raw_profile = raw_contract.get("need_profile")
+            if isinstance(raw_profile, dict):
+                with contextlib.suppress(Exception):
+                    return NeedProfile(**raw_profile)
+        return None
+
+    def _brick_catalog_dir(self) -> Path:
+        root = Path(__file__).resolve().parents[3]
+        candidates = [
+            root / "skills" / "doramagic" / "bricks",
+            root / "bricks",
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        return candidates[0]
+
+    async def _probe_brick_coverage(self, profile: NeedProfile) -> dict[str, Any]:
+        bricks_dir = self._brick_catalog_dir()
+        try:
+            matches = await match_brick_categories(profile.intent or profile.raw_input, profile.domain, self._adapter)
+            selected = select_bricks(matches, bricks_dir, max_bricks=1000)
+        except Exception as exc:
+            logger.warning("Brick coverage probe failed: %s", exc)
+            return {
+                "matched_categories": [],
+                "match_count": 0,
+                "total_bricks": 0,
+                "eligible": False,
+                "bricks_dir": str(bricks_dir),
+                "error": str(exc),
+            }
+
+        matched_categories = sorted({match.domain_id for match in matches})
+        total_bricks = len(selected)
+        eligible = len(matched_categories) >= 3 and total_bricks >= 30
+        return {
+            "matched_categories": matched_categories,
+            "match_count": len(matched_categories),
+            "total_bricks": total_bricks,
+            "eligible": eligible,
+            "bricks_dir": str(bricks_dir),
+        }
+
     def _evaluate_edge(self, phase: Phase) -> Phase:
         for predicate, target in CONDITIONAL_EDGES.get(phase, []):
-            if predicate(self._state):
+            if predicate(self._edge_context()):
                 return target
         return Phase.ERROR
+
+    def _edge_context(self) -> EdgeContext:
+        coverage = self._state.phase_artifacts.get("brick_coverage", {})
+        match_count = 0
+        total_bricks = 0
+        if isinstance(coverage, dict):
+            match_count = int(coverage.get("match_count", 0) or 0)
+            total_bricks = int(coverage.get("total_bricks", 0) or 0)
+        return EdgeContext(
+            raw_input=self._state.raw_input,
+            routing_route=self._state.routing_route,
+            brick_match_count=match_count,
+            brick_total_count=total_bricks,
+            clarification_round=self._state.clarification_round,
+            candidate_count=self._state.candidate_count,
+            successful_extractions=self._state.successful_extractions,
+            has_clawhub=self._state.has_clawhub,
+            synthesis_ok=self._state.synthesis_ok,
+            compile_ok=self._state.compile_ok,
+            compile_ready=self._state.compile_ready,
+            quality_score=self._state.quality_score,
+            revise_count=self._state.revise_count,
+            weakest_section=self._state.weakest_section,
+            blockers=[],
+            budget_exceeded=self._state.budget_exceeded,
+        )
 
     def _transition(self, target: Phase) -> None:
         current = self._state.phase

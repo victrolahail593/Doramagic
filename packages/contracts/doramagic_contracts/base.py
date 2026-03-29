@@ -12,7 +12,13 @@ Priority = Literal["high", "medium", "low"]
 Confidence = Literal["high", "medium", "low"]
 CandidateType = Literal["github_repo", "community_skill", "tutorial", "use_case"]
 SearchStatus = Literal["covered", "partial", "missing"]
-RouteKind = Literal["DIRECT_URL", "NAMED_PROJECT", "DOMAIN_EXPLORE", "LOW_CONFIDENCE"]
+RouteKind = Literal[
+    "DIRECT_URL",
+    "NAMED_PROJECT",
+    "DOMAIN_EXPLORE",
+    "BRICK_STITCH",
+    "LOW_CONFIDENCE",
+]
 RepoType = Literal["TOOL", "FRAMEWORK", "CATALOG"]
 KnowledgeType = Literal[
     "capability", "rationale", "constraint", "interface", "failure", "assembly_pattern"

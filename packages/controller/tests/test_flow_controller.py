@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -126,6 +127,19 @@ def _make_need_profile() -> NeedProfile:
         constraints=[],
         confidence=0.95,
         domain="controller",
+        max_projects=1,
+    )
+
+
+def _make_domain_explore_profile() -> NeedProfile:
+    return NeedProfile(
+        raw_input="Build a knowledge system for this domain",
+        keywords=[],
+        intent="stitch bricks directly",
+        search_directions=[],
+        constraints=[],
+        confidence=0.95,
+        domain="knowledge_ops",
         max_projects=1,
     )
 
@@ -403,6 +417,34 @@ def test_evaluate_edge_returns_expected_phase(
     assert controller._evaluate_edge(phase) == expected
 
 
+def test_evaluate_edge_routes_domain_explore_to_brick_stitch(tmp_path: Path) -> None:
+    controller = _make_controller(tmp_path)
+    controller._state = ControllerState(
+        run_id="run-1",
+        phase=Phase.PHASE_A,
+        raw_input="Build a knowledge system for this domain",
+        phase_artifacts={
+            "routing_decision": {
+                "route": "DOMAIN_EXPLORE",
+                "skip_discovery": False,
+                "max_repos": 1,
+                "repo_urls": [],
+                "project_names": [],
+                "confidence": 0.95,
+                "reasoning": "domain",
+            },
+            "brick_coverage": {
+                "matched_categories": ["a", "b", "c"],
+                "match_count": 3,
+                "total_bricks": 30,
+                "eligible": True,
+            },
+        },
+    )
+
+    assert controller._evaluate_edge(Phase.PHASE_A) == Phase.BRICK_STITCH
+
+
 def test_transition_handles_legal_and_illegal_moves(tmp_path: Path) -> None:
     controller = _make_controller(tmp_path)
     controller._state = ControllerState(run_id="run-1", phase=Phase.INIT)
@@ -461,3 +503,61 @@ def test_run_completes_full_flow_with_mocked_executors(tmp_path: Path) -> None:
 
     for name, executor in executors.items():
         assert executor.execute.await_count == 1, name
+
+
+def test_run_brick_stitch_path_jumps_to_validator(tmp_path: Path) -> None:
+    executors = {
+        "NeedProfileBuilder": _make_executor(
+            _envelope("NeedProfileBuilder", _make_domain_explore_profile())
+        ),
+        "Validator": _make_executor(_envelope("Validator", _make_validation_result())),
+        "DeliveryPackager": _make_executor(_envelope("DeliveryPackager", _make_delivery_result())),
+    }
+
+    with (
+        patch("doramagic_controller.flow_controller.build_capability_router", return_value=None),
+        patch(
+            "doramagic_controller.flow_controller.match_brick_categories",
+            new=AsyncMock(
+                return_value=[
+                    SimpleNamespace(domain_id="skill_architecture"),
+                    SimpleNamespace(domain_id="react"),
+                    SimpleNamespace(domain_id="langgraph"),
+                ]
+            ),
+        ),
+        patch(
+            "doramagic_controller.flow_controller.select_bricks",
+            return_value=[SimpleNamespace(brick={"id": i}) for i in range(30)],
+        ),
+        patch(
+            "doramagic_controller.flow_controller.run_brick_stitch",
+            new=AsyncMock(
+                return_value=_envelope(
+                    "BrickStitcher",
+                    {
+                        "bricks_used": 30,
+                        "categories_matched": ["langgraph", "react", "skill_architecture"],
+                        "skill_key": "knowledge_ops",
+                    },
+                )
+            ),
+        ),
+    ):
+        controller = FlowController(
+            adapter=_make_adapter(),
+            run_dir=tmp_path / "run-001",
+            executors=executors,
+        )
+
+        result = asyncio.run(controller.run(user_input="Build a knowledge system for this domain"))
+
+    assert result.phase == Phase.DONE
+    assert result.phase_artifacts["brick_coverage"]["eligible"] is True
+    assert result.phase_artifacts["brick_stitch_result"]["bricks_used"] == 30
+    assert result.phase_artifacts["compile_bundle"]["artifact_paths"]["SKILL.md"].endswith(
+        "delivery/SKILL.md"
+    )
+    executors["NeedProfileBuilder"].execute.assert_awaited_once()
+    executors["Validator"].execute.assert_awaited_once()
+    executors["DeliveryPackager"].execute.assert_awaited_once()

@@ -17,11 +17,18 @@ class RoutingDecision(BaseModel):
       DIRECT_URL     -- user gave explicit repo URL(s), skip Discovery
       NAMED_PROJECT  -- user named a project, targeted Discovery
       DOMAIN_EXPLORE -- user described a domain, broad Discovery
+      BRICK_STITCH   -- domain coverage is strong enough for direct brick stitching
       LOW_CONFIDENCE -- ambiguous input, need clarification
     """
 
     schema_version: str = "dm.routing-decision.v1"
-    route: Literal["DIRECT_URL", "NAMED_PROJECT", "DOMAIN_EXPLORE", "LOW_CONFIDENCE"]
+    route: Literal[
+        "DIRECT_URL",
+        "NAMED_PROJECT",
+        "DOMAIN_EXPLORE",
+        "BRICK_STITCH",
+        "LOW_CONFIDENCE",
+    ]
     skip_discovery: bool = False
     max_repos: int = Field(default=3, ge=1, le=5)
     repo_urls: list[str] = []

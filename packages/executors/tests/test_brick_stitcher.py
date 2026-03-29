@@ -6,14 +6,38 @@
 from __future__ import annotations
 
 import json
+import importlib.util
+import sys
 from pathlib import Path
 
-from doramagic_executors.brick_stitcher import (
-    BRICK_CATALOG,
-    BrickMatch,
-    _fallback_match,
-    select_bricks,
+# ---------------------------------------------------------------------------
+# sys.path: allow running from any working directory
+# ---------------------------------------------------------------------------
+_THIS_DIR = Path(__file__).resolve().parent
+_PACKAGES_DIR = _THIS_DIR.parent.parent
+
+for _p in [
+    str(_PACKAGES_DIR / "contracts"),
+    str(_PACKAGES_DIR / "executors"),
+]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+_BRICK_STITCHER_PATH = (
+    _PACKAGES_DIR / "executors" / "doramagic_executors" / "brick_stitcher.py"
 )
+_spec = importlib.util.spec_from_file_location(
+    "test_brick_stitcher_module", _BRICK_STITCHER_PATH
+)
+assert _spec is not None and _spec.loader is not None
+_module = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = _module
+_spec.loader.exec_module(_module)
+
+BRICK_CATALOG = _module.BRICK_CATALOG
+BrickMatch = _module.BrickMatch
+_fallback_match = _module._fallback_match
+select_bricks = _module.select_bricks
 
 # ---------------------------------------------------------------------------
 # BrickMatcher 回退匹配

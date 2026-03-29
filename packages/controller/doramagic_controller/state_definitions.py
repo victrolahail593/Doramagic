@@ -20,6 +20,7 @@ class Phase(str, Enum):
     PHASE_A = "PHASE_A"  # Need Profile + Input Router
     PHASE_A_CLARIFY = "PHASE_A_CLARIFY"  # Socratic Gate (waiting for user)
     PHASE_B = "PHASE_B"  # Discovery
+    BRICK_STITCH = "BRICK_STITCH"  # Direct brick stitching
     PHASE_C = "PHASE_C"  # Fan-out Repo Workers (extraction + community)
     PHASE_D = "PHASE_D"  # Synthesis
     PHASE_E = "PHASE_E"  # Compile
@@ -35,6 +36,7 @@ TRANSITIONS: dict[Phase, set[Phase]] = {
     Phase.INIT: {Phase.PHASE_A, Phase.ERROR},
     Phase.PHASE_A: {
         Phase.PHASE_A_CLARIFY,
+        Phase.BRICK_STITCH,
         Phase.PHASE_B,
         Phase.PHASE_C,
         Phase.DEGRADED,
@@ -42,6 +44,7 @@ TRANSITIONS: dict[Phase, set[Phase]] = {
     },
     Phase.PHASE_A_CLARIFY: {Phase.PHASE_A, Phase.PHASE_B, Phase.DEGRADED, Phase.ERROR},
     Phase.PHASE_B: {Phase.PHASE_C, Phase.DEGRADED, Phase.ERROR},
+    Phase.BRICK_STITCH: {Phase.PHASE_F, Phase.DEGRADED, Phase.ERROR},
     Phase.PHASE_C: {Phase.PHASE_D, Phase.DEGRADED, Phase.ERROR},
     Phase.PHASE_D: {Phase.PHASE_E, Phase.DEGRADED, Phase.ERROR},
     Phase.PHASE_E: {Phase.PHASE_F, Phase.DEGRADED, Phase.ERROR},
@@ -63,6 +66,8 @@ class EdgeContext:
         self,
         raw_input: str = "",
         routing_route: str = "",
+        brick_match_count: int = 0,
+        brick_total_count: int = 0,
         clarification_round: int = 0,
         candidate_count: int = 0,
         successful_extractions: int = 0,
@@ -78,6 +83,8 @@ class EdgeContext:
     ):
         self.raw_input = raw_input
         self.routing_route = routing_route
+        self.brick_match_count = brick_match_count
+        self.brick_total_count = brick_total_count
         self.clarification_round = clarification_round
         self.candidate_count = candidate_count
         self.successful_extractions = successful_extractions
@@ -102,6 +109,14 @@ CONDITIONAL_EDGES: dict[Phase, list[tuple[Callable[[EdgeContext], bool], Phase]]
     Phase.PHASE_A: [
         (lambda ctx: ctx.routing_route == "LOW_CONFIDENCE", Phase.PHASE_A_CLARIFY),
         (lambda ctx: ctx.routing_route == "DIRECT_URL", Phase.PHASE_C),  # skip B
+        (
+            lambda ctx: (
+                ctx.routing_route == "DOMAIN_EXPLORE"
+                and ctx.brick_match_count >= 3
+                and ctx.brick_total_count >= 30
+            ),
+            Phase.BRICK_STITCH,
+        ),
         (lambda ctx: ctx.routing_route in ("NAMED_PROJECT", "DOMAIN_EXPLORE"), Phase.PHASE_B),
         (lambda ctx: True, Phase.PHASE_B),  # fallback
     ],
@@ -112,6 +127,9 @@ CONDITIONAL_EDGES: dict[Phase, list[tuple[Callable[[EdgeContext], bool], Phase]]
     Phase.PHASE_B: [
         (lambda ctx: ctx.candidate_count > 0, Phase.PHASE_C),
         (lambda ctx: True, Phase.DEGRADED),
+    ],
+    Phase.BRICK_STITCH: [
+        (lambda ctx: True, Phase.PHASE_F),
     ],
     Phase.PHASE_C: [
         (lambda ctx: ctx.successful_extractions > 0, Phase.PHASE_D),
@@ -149,6 +167,7 @@ PHASE_EXECUTOR_MAP: dict[Phase, str | None] = {
     Phase.PHASE_A: "NeedProfileBuilder",
     Phase.PHASE_A_CLARIFY: None,  # controller handles (wait for user)
     Phase.PHASE_B: "DiscoveryRunner",
+    Phase.BRICK_STITCH: None,  # controller handles (direct brick stitch)
     Phase.PHASE_C: "WorkerSupervisor",  # fan-out repo workers
     Phase.PHASE_D: "SynthesisRunner",
     Phase.PHASE_E: "SkillCompiler",

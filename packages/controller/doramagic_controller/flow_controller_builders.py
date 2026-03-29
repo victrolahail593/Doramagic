@@ -177,8 +177,34 @@ def build_executor_input(
 
     if executor_name == "Validator":
         need_profile = NeedProfile(**arts["need_profile"])
-        synthesis = SynthesisReportData(**arts.get("synthesis_bundle", {}))
-        compile_bundle = CompileBundleContract(**arts.get("compile_bundle", {}))
+        synthesis_raw = arts.get("synthesis_bundle", {})
+        if isinstance(synthesis_raw, dict) and synthesis_raw:
+            synthesis = SynthesisReportData(**synthesis_raw)
+        else:
+            synthesis = SynthesisReportData(
+                consensus=[],
+                conflicts=[],
+                unique_knowledge=[],
+                selected_knowledge=[],
+                excluded_knowledge=[],
+                open_questions=[],
+                compile_ready=True,
+                global_theses=[],
+                common_why=[],
+                divergences=[],
+                source_provenance_matrix={},
+                unknowns=[],
+                compile_brief_by_section={},
+            )
+        compile_raw = arts.get("compile_bundle", {})
+        if isinstance(compile_raw, dict) and compile_raw:
+            compile_bundle = CompileBundleContract(**compile_raw)
+        else:
+            compile_bundle = CompileBundleContract(
+                section_drafts={},
+                full_draft="",
+                artifact_paths={},
+            )
         artifact_paths = compile_bundle.artifact_paths
         return ValidationInput(
             need_profile=need_profile,
