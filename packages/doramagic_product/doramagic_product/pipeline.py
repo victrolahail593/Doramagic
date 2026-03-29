@@ -11,13 +11,12 @@ import re
 import shutil
 import subprocess
 import sys
-import time
 import zipfile
+from collections.abc import Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import httpx
 
@@ -26,27 +25,27 @@ sys.path.insert(0, str(_PROJECT_ROOT / "packages" / "contracts"))
 sys.path.insert(0, str(_PROJECT_ROOT / "packages" / "cross_project"))
 sys.path.insert(0, str(_PROJECT_ROOT / "packages" / "skill_compiler"))
 sys.path.insert(0, str(_PROJECT_ROOT / "packages" / "platform_openclaw"))
+sys.path.insert(0, str(_PROJECT_ROOT / "packages" / "shared_utils"))
 
 from doramagic_contracts.base import (  # noqa: E402
     CandidateQualitySignals,
     CommunitySignals,
-    Confidence,
     DiscoveryCandidate,
     EvidenceRef,
     KnowledgeAtom,
     NeedProfile,
     ProjectFingerprint,
     RepoRef,
-    SearchDirection,
     SearchCoverageItem,
+    SearchDirection,
 )
 from doramagic_contracts.cross_project import (  # noqa: E402
-    CompareConfig,
     CommunityKnowledge,
     CommunityKnowledgeItem,
+    CompareConfig,
     CompareInput,
-    DiscoveryInput,
     DiscoveryConfig,
+    DiscoveryInput,
     DiscoveryResult,
     ExtractedProjectSummary,
     SynthesisConflict,
@@ -56,8 +55,8 @@ from doramagic_contracts.cross_project import (  # noqa: E402
 )
 from doramagic_contracts.skill import (  # noqa: E402
     PlatformRules,
-    SkillCompilerInput,
     SkillBundlePaths,
+    SkillCompilerInput,
     ValidationInput,
 )
 from doramagic_cross_project.compare import run_compare  # noqa: E402
@@ -176,7 +175,7 @@ def _slugify(value: str) -> str:
 
 
 def _utc_timestamp() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _run_id_from_request(user_input: str) -> str:
@@ -197,7 +196,7 @@ def _priority_from_score(score: float) -> str:
     return "low"
 
 
-def _tokenize_request(user_input: str) -> List[str]:
+def _tokenize_request(user_input: str) -> list[str]:
     tokens = []
     for alias_key in sorted(_KEYWORD_ALIASES.keys(), key=len, reverse=True):
         if alias_key in user_input and alias_key not in tokens and alias_key not in _STOPWORDS:
@@ -211,7 +210,7 @@ def _tokenize_request(user_input: str) -> List[str]:
     return tokens[:8]
 
 
-def _keyword_aliases(keywords: Sequence[str]) -> List[str]:
+def _keyword_aliases(keywords: Sequence[str]) -> list[str]:
     aliases = []
     for keyword in keywords:
         if keyword not in aliases:
@@ -242,12 +241,14 @@ def _human_domain_label(need_profile: NeedProfile) -> str:
 def _render_frontmatter(skill_key: str, storage_prefix: str) -> str:
     lines = [
         "---",
-        "skillKey: {0}".format(skill_key),
+        f"skillKey: {skill_key}",
         "always: false",
         "os:",
         "  - macos",
         "  - linux",
-        "install: Store runtime data under {0}{1}/".format(storage_prefix.rstrip("/") + "/", skill_key),
+        "install: Store runtime data under {0}{1}/".format(
+            storage_prefix.rstrip("/") + "/", skill_key
+        ),
         "allowed-tools:",
         "  - exec",
         "  - read",
@@ -257,7 +258,7 @@ def _render_frontmatter(skill_key: str, storage_prefix: str) -> str:
     return "\n".join(lines)
 
 
-def _estimate_issue_activity(stars: Optional[int], updated_at: Optional[str]) -> str:
+def _estimate_issue_activity(stars: int | None, updated_at: str | None) -> str:
     if stars is not None and stars >= 1000:
         return "active"
     if updated_at:
@@ -265,7 +266,7 @@ def _estimate_issue_activity(stars: Optional[int], updated_at: Optional[str]) ->
     return "low"
 
 
-def _license_name(item: dict) -> Optional[str]:
+def _license_name(item: dict) -> str | None:
     license_info = item.get("license")
     if isinstance(license_info, dict):
         return license_info.get("spdx_id") or license_info.get("name")
@@ -273,7 +274,7 @@ def _license_name(item: dict) -> Optional[str]:
 
 
 @contextmanager
-def _temp_environ(overrides: Dict[str, Optional[str]]):
+def _temp_environ(overrides: dict[str, str | None]):
     original = {}
     for key, value in overrides.items():
         original[key] = os.environ.get(key)
@@ -296,26 +297,26 @@ class CandidateInfo:
     """Enriched discovery candidate used internally by the product pipeline."""
 
     candidate: DiscoveryCandidate
-    owner: Optional[str] = None
-    repo: Optional[str] = None
+    owner: str | None = None
+    repo: str | None = None
     default_branch: str = "main"
     description: str = ""
-    stars: Optional[int] = None
-    forks: Optional[int] = None
-    updated_at: Optional[str] = None
-    license_name: Optional[str] = None
-    local_source: Optional[Path] = None
+    stars: int | None = None
+    forks: int | None = None
+    updated_at: str | None = None
+    license_name: str | None = None
+    local_source: Path | None = None
     source_payload: dict = field(default_factory=dict)
 
 
 @dataclass
 class RepoScan:
-    languages: List[str]
-    frameworks: List[str]
-    entrypoints: List[str]
-    commands: List[str]
-    storage_paths: List[str]
-    dependencies: List[str]
+    languages: list[str]
+    frameworks: list[str]
+    entrypoints: list[str]
+    commands: list[str]
+    storage_paths: list[str]
+    dependencies: list[str]
     repo_summary: str
 
 
@@ -323,10 +324,10 @@ class RepoScan:
 class ExtractionArtifact:
     design_philosophy: str
     mental_model: str
-    concepts: List[dict]
-    workflows: List[dict]
-    rules: List[dict]
-    gotchas: List[dict]
+    concepts: list[dict]
+    workflows: list[dict]
+    rules: list[dict]
+    gotchas: list[dict]
     expert_narrative: str
     community_wisdom: str
     module_map: str
@@ -342,7 +343,7 @@ class ProjectPacket:
     project_summary: ExtractedProjectSummary
     community_item: CommunityKnowledgeItem
     output_dir: Path
-    warnings: List[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
     metadata_only: bool = False
 
 
@@ -352,67 +353,53 @@ class DoramagicRunResult:
     delivery_dir: Path
     need_profile: NeedProfile
     discovery_result: DiscoveryResult
-    project_packets: List[ProjectPacket]
+    project_packets: list[ProjectPacket]
     synthesis_report: SynthesisReportData
     validation_status: str
     validation_details: dict
     skill_path: Path
     provenance_path: Path
     limitations_path: Path
-    warnings: List[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
 
 class AnthropicLLMBackend:
-    """Thin Anthropic SDK adapter with graceful availability checks."""
+    """LLM 后端 — 通过 LLMAdapter 统一调用，不直接依赖任何 provider SDK。"""
 
     def __init__(self) -> None:
-        self._client = None
+        self._adapter = None
         self._enabled = False
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key:
-            return
         try:
-            import anthropic  # type: ignore
-        except Exception:
-            return
-        try:
-            base_url = os.environ.get("ANTHROPIC_BASE_URL")
-            if base_url:
-                self._client = anthropic.Anthropic(base_url=base_url)
-            else:
-                self._client = anthropic.Anthropic()
+            from doramagic_shared_utils.llm_adapter import LLMAdapter
+
+            self._adapter = LLMAdapter()
             self._enabled = True
         except Exception:
-            self._client = None
             self._enabled = False
 
     @property
     def enabled(self) -> bool:
-        return self._enabled and self._client is not None
+        return self._enabled and self._adapter is not None
 
     def complete_text(
         self,
         system_prompt: str,
         user_prompt: str,
-        model: Optional[str] = None,
+        model: str | None = None,
         max_tokens: int = 2500,
     ) -> str:
         if not self.enabled:
-            raise RuntimeError("Anthropic SDK is unavailable or not configured.")
-        selected_model = model or os.environ.get("DORAMAGIC_DEFAULT_MODEL", "claude-sonnet-4-6")
-        response = self._client.messages.create(
-            model=selected_model,
-            max_tokens=max_tokens,
-            temperature=0.2,
+            raise RuntimeError("LLMAdapter is unavailable.")
+        from doramagic_shared_utils.llm_adapter import LLMMessage
+
+        messages = [LLMMessage(role="user", content=user_prompt)]
+        response = self._adapter.chat(
+            messages,
             system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
+            temperature=0.2,
+            max_tokens=max_tokens,
         )
-        parts = []
-        for block in getattr(response, "content", []):
-            text = getattr(block, "text", None)
-            if text:
-                parts.append(text)
-        return "".join(parts).strip()
+        return response.content
 
 
 class DoramagicProductPipeline:
@@ -420,14 +407,16 @@ class DoramagicProductPipeline:
 
     def __init__(
         self,
-        project_root: Optional[Path] = None,
-        runs_dir: Optional[Path] = None,
-        http_client: Optional[httpx.Client] = None,
-        llm_backend: Optional[AnthropicLLMBackend] = None,
+        project_root: Path | None = None,
+        runs_dir: Path | None = None,
+        http_client: httpx.Client | None = None,
+        llm_backend: AnthropicLLMBackend | None = None,
     ) -> None:
         self.project_root = (project_root or _PROJECT_ROOT).resolve()
         self.runs_dir = (runs_dir or (self.project_root / "runs")).resolve()
-        self.http_client = http_client or httpx.Client(timeout=DEFAULT_TIMEOUT, follow_redirects=True)
+        self.http_client = http_client or httpx.Client(
+            timeout=DEFAULT_TIMEOUT, follow_redirects=True
+        )
         self.llm_backend = llm_backend or AnthropicLLMBackend()
         self.soul_root = self.project_root / "skills" / "soul-extractor"
         self.platform_rules = PlatformRules()
@@ -501,14 +490,16 @@ class DoramagicProductPipeline:
     # Phase B
     # ------------------------------------------------------------------
 
-    def discover_candidates(self, need_profile: NeedProfile) -> Tuple[DiscoveryResult, List[CandidateInfo], List[str]]:
+    def discover_candidates(
+        self, need_profile: NeedProfile
+    ) -> tuple[DiscoveryResult, list[CandidateInfo], list[str]]:
         warnings = []
         try:
             discovery, candidate_infos = self._discover_candidates_via_github(need_profile)
             if candidate_infos:
                 return discovery, candidate_infos, warnings
         except Exception as exc:
-            warnings.append("GitHub Search API failed: {0}".format(exc))
+            warnings.append(f"GitHub Search API failed: {exc}")
 
         fallback = run_discovery(
             DiscoveryInput(
@@ -532,10 +523,14 @@ class DoramagicProductPipeline:
             return fallback.data, candidate_infos, warnings
 
         offline_result, offline_infos = self._offline_candidates_from_need(need_profile)
-        warnings.append("No live candidates discovered. Falling back to metadata-only offline reference patterns.")
+        warnings.append(
+            "No live candidates discovered. Falling back to metadata-only offline reference patterns."
+        )
         return offline_result, offline_infos, warnings
 
-    def _discover_candidates_via_github(self, need_profile: NeedProfile) -> Tuple[DiscoveryResult, List[CandidateInfo]]:
+    def _discover_candidates_via_github(
+        self, need_profile: NeedProfile
+    ) -> tuple[DiscoveryResult, list[CandidateInfo]]:
         aliases = _keyword_aliases(need_profile.keywords)
         search_terms = []
         for alias in aliases[:6]:
@@ -550,7 +545,7 @@ class DoramagicProductPipeline:
             response = self.http_client.get(
                 SEARCH_API_URL,
                 params={
-                    "q": "{0} in:name,description,readme archived:false fork:false".format(term),
+                    "q": f"{term} in:name,description,readme archived:false fork:false",
                     "sort": "stars",
                     "order": "desc",
                     "per_page": 5,
@@ -582,16 +577,19 @@ class DoramagicProductPipeline:
                 forks=item.get("forks_count"),
                 last_updated=item.get("updated_at"),
                 has_readme=True,
-                issue_activity=_estimate_issue_activity(item.get("stargazers_count"), item.get("updated_at")),
+                issue_activity=_estimate_issue_activity(
+                    item.get("stargazers_count"), item.get("updated_at")
+                ),
                 license=_license_name(item),
             )
             candidate = DiscoveryCandidate(
-                candidate_id="cand-{0:03d}".format(index),
-                name=item.get("name", "candidate-{0}".format(index)),
+                candidate_id=f"cand-{index:03d}",
+                name=item.get("name", f"candidate-{index}"),
                 url=item["html_url"],
                 type="github_repo",
                 relevance=_priority_from_score(quick_score),
-                contribution=item.get("description") or "GitHub repository discovered for the requested need.",
+                contribution=item.get("description")
+                or "GitHub repository discovered for the requested need.",
                 quick_score=min(10.0, quick_score),
                 quality_signals=quality,
                 selected_for_phase_c=index <= 3,
@@ -615,11 +613,13 @@ class DoramagicProductPipeline:
 
         coverage = []
         combined_text = " ".join(
-            "{0} {1}".format(info.candidate.name, info.description).lower() for info in candidate_infos
+            f"{info.candidate.name} {info.description}".lower() for info in candidate_infos
         )
         for direction in need_profile.search_directions:
             status = "covered" if direction.direction.lower() in combined_text else "partial"
-            coverage.append(SearchCoverageItem(direction=direction.direction, status=status, notes=None))
+            coverage.append(
+                SearchCoverageItem(direction=direction.direction, status=status, notes=None)
+            )
 
         return DiscoveryResult(candidates=candidates, search_coverage=coverage), candidate_infos
 
@@ -642,7 +642,7 @@ class DoramagicProductPipeline:
     def _offline_candidates_from_need(
         self,
         need_profile: NeedProfile,
-    ) -> Tuple[DiscoveryResult, List[CandidateInfo]]:
+    ) -> tuple[DiscoveryResult, list[CandidateInfo]]:
         aliases = _keyword_aliases(need_profile.keywords) or [need_profile.intent]
         base_terms = []
         for item in aliases:
@@ -662,12 +662,12 @@ class DoramagicProductPipeline:
             term = base_terms[min(index - 1, len(base_terms) - 1)]
             query = term.replace(" ", "+")
             candidate = DiscoveryCandidate(
-                candidate_id="offline-{0:03d}".format(index),
+                candidate_id=f"offline-{index:03d}",
                 name="{0}-{1}".format(_slugify(term) or "domain", suffix),
-                url="https://github.com/search?q={0}".format(query),
+                url=f"https://github.com/search?q={query}",
                 type=candidate_type,
                 relevance="medium",
-                contribution="{0} for {1}".format(description_suffix, need_profile.intent),
+                contribution=f"{description_suffix} for {need_profile.intent}",
                 quick_score=4.0 + (0.2 * index),
                 quality_signals=CandidateQualitySignals(
                     stars=None,
@@ -715,7 +715,7 @@ class DoramagicProductPipeline:
         need_profile: NeedProfile,
         run_dir: Path,
         candidate_infos: Sequence[CandidateInfo],
-    ) -> Tuple[List[ProjectPacket], List[str]]:
+    ) -> tuple[list[ProjectPacket], list[str]]:
         packets = []
         warnings = []
         projects_dir = run_dir / "projects"
@@ -726,7 +726,7 @@ class DoramagicProductPipeline:
                 packets.append(packet)
             except Exception as exc:
                 warnings.append(
-                    "Project extraction failed for {0}: {1}".format(candidate_info.candidate.name, exc)
+                    f"Project extraction failed for {candidate_info.candidate.name}: {exc}"
                 )
         return packets, warnings
 
@@ -751,15 +751,21 @@ class DoramagicProductPipeline:
                 self.download_candidate_repo(candidate_info, repo_dir)
             except Exception as exc:
                 metadata_only = True
-                warnings.append("Repository download failed: {0}".format(exc))
+                warnings.append(f"Repository download failed: {exc}")
         else:
             metadata_only = True
             warnings.append("Candidate has no downloadable GitHub repository metadata.")
 
         self._prepare_project_artifacts(candidate_info, project_dir, repo_dir, metadata_only)
-        repo_scan = self._scan_project_repo(repo_dir if repo_dir.exists() else None, candidate_info, need_profile)
-        extraction = self._extract_knowledge(project_dir, need_profile, candidate_info, repo_scan, metadata_only)
-        repo_ref = self._build_repo_ref(candidate_info, repo_dir if repo_dir.exists() else project_dir / "metadata")
+        repo_scan = self._scan_project_repo(
+            repo_dir if repo_dir.exists() else None, candidate_info, need_profile
+        )
+        extraction = self._extract_knowledge(
+            project_dir, need_profile, candidate_info, repo_scan, metadata_only
+        )
+        repo_ref = self._build_repo_ref(
+            candidate_info, repo_dir if repo_dir.exists() else project_dir / "metadata"
+        )
         fingerprint = self._build_project_fingerprint(need_profile, repo_ref, repo_scan, extraction)
         summary = self._build_project_summary(fingerprint)
         community_item = self._build_community_item(candidate_info, extraction, repo_scan)
@@ -853,10 +859,10 @@ class DoramagicProductPipeline:
                 self._fallback_community_signals(candidate_info),
             )
 
-    def _build_repo_pack(self, repo_dir: Optional[Path], candidate_info: CandidateInfo) -> str:
+    def _build_repo_pack(self, repo_dir: Path | None, candidate_info: CandidateInfo) -> str:
         header = [
-            "<repo name=\"{0}\">".format(candidate_info.candidate.name),
-            "<summary>{0}</summary>".format(candidate_info.description or candidate_info.candidate.contribution),
+            f'<repo name="{candidate_info.candidate.name}">',
+            f"<summary>{candidate_info.description or candidate_info.candidate.contribution}</summary>",
         ]
         if repo_dir is None or not repo_dir.exists():
             header.append("<note>metadata-only candidate</note>")
@@ -882,7 +888,7 @@ class DoramagicProductPipeline:
                 continue
             body.extend(
                 [
-                    "<file path=\"{0}\">".format(relative),
+                    f'<file path="{relative}">',
                     content,
                     "</file>",
                 ]
@@ -893,27 +899,29 @@ class DoramagicProductPipeline:
         lines = [
             "# community_signals",
             "",
-            "- SIG-001 | metadata | Candidate discovered by Doramagic | {0}".format(
-                candidate_info.description or candidate_info.candidate.contribution
-            ),
+            f"- SIG-001 | metadata | Candidate discovered by Doramagic | {candidate_info.description or candidate_info.candidate.contribution}",
             "- SIG-002 | license | {0}".format(candidate_info.license_name or "license unknown"),
         ]
         return "\n".join(lines) + "\n"
 
     def _scan_project_repo(
         self,
-        repo_dir: Optional[Path],
+        repo_dir: Path | None,
         candidate_info: CandidateInfo,
         need_profile: NeedProfile,
     ) -> RepoScan:
         if repo_dir is None or not repo_dir.exists():
-            summary = candidate_info.description or candidate_info.candidate.contribution or need_profile.intent
+            summary = (
+                candidate_info.description
+                or candidate_info.candidate.contribution
+                or need_profile.intent
+            )
             return RepoScan(
                 languages=["Unknown"],
                 frameworks=[],
                 entrypoints=[],
                 commands=[],
-                storage_paths=["~/clawd/{0}/".format(_slugify(candidate_info.candidate.name))],
+                storage_paths=[f"~/clawd/{_slugify(candidate_info.candidate.name)}/"],
                 dependencies=[],
                 repo_summary=summary,
             )
@@ -934,7 +942,14 @@ class DoramagicProductPipeline:
                 language = _EXTENSION_LANGUAGES[path.suffix.lower()]
                 if language not in languages:
                     languages.append(language)
-            if path.name.lower() in ("main.py", "app.py", "cli.py", "manage.py", "index.js", "server.js"):
+            if path.name.lower() in (
+                "main.py",
+                "app.py",
+                "cli.py",
+                "manage.py",
+                "index.js",
+                "server.js",
+            ):
                 if relative not in entrypoints:
                     entrypoints.append(relative)
             if "readme" in path.name.lower() and not readme_excerpt:
@@ -951,7 +966,7 @@ class DoramagicProductPipeline:
                     if dep_name not in dependencies:
                         dependencies.append(dep_name)
                 for script_name in sorted((data.get("scripts") or {}).keys()):
-                    command = "npm run {0}".format(script_name)
+                    command = f"npm run {script_name}"
                     if command not in commands:
                         commands.append(command)
             if path.name in ("requirements.txt", "pyproject.toml", "Pipfile"):
@@ -966,11 +981,16 @@ class DoramagicProductPipeline:
                     dependency = re.split(r"[<>= ]+", line)[0]
                     if dependency and dependency not in dependencies:
                         dependencies.append(dependency)
-            if any(token in relative.lower() for token in ("sqlite", "db", "database", "storage", "data", ".json")):
+            if any(
+                token in relative.lower()
+                for token in ("sqlite", "db", "database", "storage", "data", ".json")
+            ):
                 if relative not in storage_paths and len(storage_paths) < 6:
                     storage_paths.append(relative)
 
-        combined_text = " ".join([readme_excerpt, " ".join(dependencies), " ".join(entrypoints)]).lower()
+        combined_text = " ".join(
+            [readme_excerpt, " ".join(dependencies), " ".join(entrypoints)]
+        ).lower()
         for token, framework in _FRAMEWORK_HINTS.items():
             if token in combined_text and framework not in frameworks:
                 frameworks.append(framework)
@@ -983,10 +1003,10 @@ class DoramagicProductPipeline:
         if not commands:
             for candidate in ("manage.py", "cli.py"):
                 if (repo_dir / candidate).exists():
-                    commands.append("python3 {0}".format(candidate))
+                    commands.append(f"python3 {candidate}")
 
         if not storage_paths:
-            storage_paths.append("~/clawd/{0}/".format(_slugify(candidate_info.candidate.name)))
+            storage_paths.append(f"~/clawd/{_slugify(candidate_info.candidate.name)}/")
 
         repo_summary = self._summarize_repo(readme_excerpt, candidate_info, need_profile)
         return RepoScan(
@@ -1010,7 +1030,11 @@ class DoramagicProductPipeline:
             summary = re.sub(r"\s+", " ", paragraph).strip("# ").strip()
             if summary:
                 return summary[:240]
-        return candidate_info.description or candidate_info.candidate.contribution or need_profile.intent
+        return (
+            candidate_info.description
+            or candidate_info.candidate.contribution
+            or need_profile.intent
+        )
 
     def _extract_knowledge(
         self,
@@ -1034,11 +1058,15 @@ class DoramagicProductPipeline:
                         ],
                         cwd=self.project_root,
                     )
-                    return self._parse_extraction_output(project_dir, candidate_info, need_profile, repo_scan)
+                    return self._parse_extraction_output(
+                        project_dir, candidate_info, need_profile, repo_scan
+                    )
             except Exception as e:
                 print(f"Soul Extractor failed for {candidate_info.candidate.name}: {e}")
-        
-        return self._extract_knowledge_heuristic(project_dir, need_profile, candidate_info, repo_scan, metadata_only)
+
+        return self._extract_knowledge_heuristic(
+            project_dir, need_profile, candidate_info, repo_scan, metadata_only
+        )
 
     def _parse_extraction_output(
         self,
@@ -1049,7 +1077,7 @@ class DoramagicProductPipeline:
     ) -> ExtractionArtifact:
         soul_dir = project_dir / "soul"
         cards_dir = soul_dir / "cards"
-        
+
         design_philosophy = ""
         mental_model = ""
         soul_file = soul_dir / "00-soul.md"
@@ -1065,10 +1093,10 @@ class DoramagicProductPipeline:
         concepts = self._load_cards(cards_dir / "concepts")
         workflows = self._load_cards(cards_dir / "workflows")
         all_rules = self._load_cards(cards_dir / "rules")
-        
+
         rules = [r for r in all_rules if r.get("type") != "UNSAID_GOTCHA"]
         gotchas = [r for r in all_rules if r.get("type") == "UNSAID_GOTCHA"]
-        
+
         if not gotchas:
             # Maybe they are not typed this way in all_rules, try another filter or just take some
             gotchas = all_rules[5:] if len(all_rules) > 5 else []
@@ -1078,12 +1106,12 @@ class DoramagicProductPipeline:
         en_file = soul_dir / "expert_narrative.md"
         if en_file.exists():
             expert_narrative = en_file.read_text(encoding="utf-8")
-            
+
         community_wisdom = ""
         cw_file = soul_dir / "community-wisdom.md"
         if cw_file.exists():
             community_wisdom = cw_file.read_text(encoding="utf-8")
-            
+
         module_map = ""
         mm_file = soul_dir / "module-map.md"
         if mm_file.exists():
@@ -1101,7 +1129,7 @@ class DoramagicProductPipeline:
             module_map=module_map,
         )
 
-    def _load_cards(self, directory: Path) -> List[dict]:
+    def _load_cards(self, directory: Path) -> list[dict]:
         cards = []
         if not directory.exists():
             return cards
@@ -1138,17 +1166,23 @@ class DoramagicProductPipeline:
         repo_scan: RepoScan,
     ) -> ExtractionArtifact:
         packed = (project_dir / "artifacts" / "packed_compressed.xml").read_text(encoding="utf-8")
-        stage1_prompt = (self.soul_root / "stages" / "STAGE-1-essence.md").read_text(encoding="utf-8")
+        stage1_prompt = (self.soul_root / "stages" / "STAGE-1-essence.md").read_text(
+            encoding="utf-8"
+        )
         system_prompt = (
             "You are Doramagic Phase C. Read the provided stage instruction and repository digest. "
             "Return strict JSON only."
         )
         user_prompt = (
-            "Stage instruction:\n{0}\n\nRepository digest:\n{1}\n\n"
-            "Return JSON with keys q1,q2,q3,q4,q5,q6,q7.".format(stage1_prompt, packed[:120000])
+            f"Stage instruction:\n{stage1_prompt}\n\nRepository digest:\n{packed[:120000]}\n\n"
+            "Return JSON with keys q1,q2,q3,q4,q5,q6,q7."
         )
-        answers = _safe_json_loads(self.llm_backend.complete_text(system_prompt, user_prompt, max_tokens=2000))
-        artifact = self._extract_knowledge_heuristic(project_dir, need_profile, candidate_info, repo_scan, False)
+        answers = _safe_json_loads(
+            self.llm_backend.complete_text(system_prompt, user_prompt, max_tokens=2000)
+        )
+        artifact = self._extract_knowledge_heuristic(
+            project_dir, need_profile, candidate_info, repo_scan, False
+        )
         artifact.design_philosophy = answers.get("q6") or artifact.design_philosophy
         artifact.mental_model = answers.get("q7") or artifact.mental_model
         artifact.expert_narrative = artifact.expert_narrative.replace(
@@ -1169,60 +1203,107 @@ class DoramagicProductPipeline:
         storage_label = self._storage_label(repo_scan)
         interface_label = self._interface_label(repo_scan)
         design_philosophy = (
-            "Favor a local-first {0} workflow so the skill stays lightweight, transparent, and "
-            "easy to adapt to OpenClaw.".format(primary_keyword)
+            f"Favor a local-first {primary_keyword} workflow so the skill stays lightweight, transparent, and "
+            "easy to adapt to OpenClaw."
         )
         if metadata_only:
-            design_philosophy += " This extraction is metadata-driven because the full repository was not available."
+            design_philosophy += (
+                " This extraction is metadata-driven because the full repository was not available."
+            )
         mental_model = (
-            "Treat this project as a focused {0} control loop: capture intent, normalize data, "
-            "store state locally, and surface the next action without ceremony.".format(primary_keyword)
+            f"Treat this project as a focused {primary_keyword} control loop: capture intent, normalize data, "
+            "store state locally, and surface the next action without ceremony."
         )
 
         concepts = [
             {
                 "card_id": "CC-001",
-                "title": "{0} Core Domain".format(candidate_info.candidate.name),
+                "title": f"{candidate_info.candidate.name} Core Domain",
                 "identity": repo_scan.repo_summary,
-                "is_items": ["A reference pattern for {0}".format(domain_label), "Grounded in real open-source usage"],
-                "is_not_items": ["Not an OpenClaw-ready bundle by itself", "Not a full platform rewrite"],
-                "attributes": [("Primary need", need_profile.intent), ("Languages", ", ".join(repo_scan.languages))],
-                "boundaries": [
-                    "Starts at the user's request for {0}".format(domain_label),
-                    "Ends at a durable {0} artifact or interaction".format(primary_keyword),
+                "is_items": [
+                    f"A reference pattern for {domain_label}",
+                    "Grounded in real open-source usage",
                 ],
-                "evidence": [self._evidence_ref(project_dir, repo_scan.entrypoints[:1], "artifact_ref", "repo-summary")],
+                "is_not_items": [
+                    "Not an OpenClaw-ready bundle by itself",
+                    "Not a full platform rewrite",
+                ],
+                "attributes": [
+                    ("Primary need", need_profile.intent),
+                    ("Languages", ", ".join(repo_scan.languages)),
+                ],
+                "boundaries": [
+                    f"Starts at the user's request for {domain_label}",
+                    f"Ends at a durable {primary_keyword} artifact or interaction",
+                ],
+                "evidence": [
+                    self._evidence_ref(
+                        project_dir, repo_scan.entrypoints[:1], "artifact_ref", "repo-summary"
+                    )
+                ],
             },
             {
                 "card_id": "CC-002",
-                "title": "{0} Storage Pattern".format(candidate_info.candidate.name),
-                "identity": "Persistent state is organized around {0}.".format(storage_label),
+                "title": f"{candidate_info.candidate.name} Storage Pattern",
+                "identity": f"Persistent state is organized around {storage_label}.",
                 "is_items": ["A storage and retrieval concern", "Important for portability"],
-                "is_not_items": ["Not a cloud-only dependency", "Not a multi-tenant platform guarantee"],
-                "attributes": [("Storage", storage_label), ("Dependencies", ", ".join(repo_scan.dependencies[:4]) or "minimal")],
-                "boundaries": ["Starts at write/update operations", "Ends when state is queryable again"],
-                "evidence": [self._evidence_ref(project_dir, repo_scan.storage_paths[:1], "artifact_ref", "storage")],
+                "is_not_items": [
+                    "Not a cloud-only dependency",
+                    "Not a multi-tenant platform guarantee",
+                ],
+                "attributes": [
+                    ("Storage", storage_label),
+                    ("Dependencies", ", ".join(repo_scan.dependencies[:4]) or "minimal"),
+                ],
+                "boundaries": [
+                    "Starts at write/update operations",
+                    "Ends when state is queryable again",
+                ],
+                "evidence": [
+                    self._evidence_ref(
+                        project_dir, repo_scan.storage_paths[:1], "artifact_ref", "storage"
+                    )
+                ],
             },
             {
                 "card_id": "CC-003",
-                "title": "{0} Interaction Surface".format(candidate_info.candidate.name),
-                "identity": "Users interact through {0}.".format(interface_label),
+                "title": f"{candidate_info.candidate.name} Interaction Surface",
+                "identity": f"Users interact through {interface_label}.",
                 "is_items": ["An entrypoint boundary", "A clue for OpenClaw tool design"],
                 "is_not_items": ["Not the underlying storage layer", "Not the full architecture"],
-                "attributes": [("Entrypoints", ", ".join(repo_scan.entrypoints) or "undiscovered"), ("Commands", ", ".join(repo_scan.commands) or "none")],
-                "boundaries": ["Starts at a read/write/exec entrypoint", "Delegates to domain logic and persistence"],
-                "evidence": [self._evidence_ref(project_dir, repo_scan.entrypoints[:1], "file_line", "entrypoint")],
+                "attributes": [
+                    ("Entrypoints", ", ".join(repo_scan.entrypoints) or "undiscovered"),
+                    ("Commands", ", ".join(repo_scan.commands) or "none"),
+                ],
+                "boundaries": [
+                    "Starts at a read/write/exec entrypoint",
+                    "Delegates to domain logic and persistence",
+                ],
+                "evidence": [
+                    self._evidence_ref(
+                        project_dir, repo_scan.entrypoints[:1], "file_line", "entrypoint"
+                    )
+                ],
             },
         ]
 
         workflows = [
             {
                 "card_id": "WF-001",
-                "title": "Capture {0} intent".format(primary_keyword),
+                "title": f"Capture {primary_keyword} intent",
                 "steps": [
-                    ("Read user input and normalize the request", self._workflow_ref(repo_scan.entrypoints[:1])),
-                    ("Translate the request into a domain record", self._workflow_ref(repo_scan.storage_paths[:1])),
-                    ("Return a concise result or next step", self._workflow_ref(repo_scan.entrypoints[-1:])),
+                    (
+                        "Read user input and normalize the request",
+                        self._workflow_ref(repo_scan.entrypoints[:1]),
+                    ),
+                    (
+                        "Translate the request into a domain record",
+                        self._workflow_ref(repo_scan.storage_paths[:1]),
+                    ),
+                    (
+                        "Return a concise result or next step",
+                        self._workflow_ref(repo_scan.entrypoints[-1:]),
+                    ),
                 ],
                 "failure_modes": [
                     "Input shape drifts away from the expected schema",
@@ -1231,11 +1312,20 @@ class DoramagicProductPipeline:
             },
             {
                 "card_id": "WF-002",
-                "title": "Persist {0} state".format(primary_keyword),
+                "title": f"Persist {primary_keyword} state",
                 "steps": [
-                    ("Validate and serialize the normalized record", self._workflow_ref(repo_scan.storage_paths[:1])),
-                    ("Write to the chosen storage layer", self._workflow_ref(repo_scan.storage_paths[:1])),
-                    ("Expose the updated state to the next interaction", self._workflow_ref(repo_scan.entrypoints[:1])),
+                    (
+                        "Validate and serialize the normalized record",
+                        self._workflow_ref(repo_scan.storage_paths[:1]),
+                    ),
+                    (
+                        "Write to the chosen storage layer",
+                        self._workflow_ref(repo_scan.storage_paths[:1]),
+                    ),
+                    (
+                        "Expose the updated state to the next interaction",
+                        self._workflow_ref(repo_scan.entrypoints[:1]),
+                    ),
                 ],
                 "failure_modes": [
                     "State is written to an implicit location the operator cannot inspect",
@@ -1246,8 +1336,14 @@ class DoramagicProductPipeline:
                 "card_id": "WF-003",
                 "title": "Adapt source logic into an OpenClaw skill",
                 "steps": [
-                    ("Identify the smallest reusable capability from the upstream repo", self._workflow_ref(repo_scan.entrypoints[:1])),
-                    ("Wrap it behind read/write/exec tool boundaries", self._workflow_ref(repo_scan.commands[:1])),
+                    (
+                        "Identify the smallest reusable capability from the upstream repo",
+                        self._workflow_ref(repo_scan.entrypoints[:1]),
+                    ),
+                    (
+                        "Wrap it behind read/write/exec tool boundaries",
+                        self._workflow_ref(repo_scan.commands[:1]),
+                    ),
                     ("Document limits and provenance before delivery", "delivery/PROVENANCE.md"),
                 ],
                 "failure_modes": [
@@ -1258,17 +1354,108 @@ class DoramagicProductPipeline:
         ]
 
         rules = [
-            self._rule_card("DR-001", candidate_info.candidate.name, "DEFAULT_BEHAVIOR", "Keep the skill local-first", "HIGH", "If a feature can run without a hosted dependency, prefer local execution and storage.", ["Store data under ~/clawd/", "Keep dependencies minimal"], ["Assume a cloud service is always available"], "OpenClaw skills must work even when external APIs are unavailable.", ["repo_facts.json", "README"],),
-            self._rule_card("DR-002", candidate_info.candidate.name, "DEFAULT_BEHAVIOR", "Preserve a visible data model", "MEDIUM", "If the skill stores structured state, use a human-inspectable format or document the storage contract.", ["Keep JSON/SQLite schemas discoverable", "Explain what each stored record means"], ["Hide durable state in undocumented temp files"], "Users need to inspect and trust the artifact Doramagic produces.", [storage_label],),
-            self._rule_card("DR-003", candidate_info.candidate.name, "DEFAULT_BEHAVIOR", "Bound the interaction surface", "MEDIUM", "If an upstream project exposes many entrypoints, keep only the smallest read/write/exec workflow needed for the skill.", ["Choose one clear primary workflow", "Document the supported commands"], ["Mirror every upstream command just because it exists"], "OpenClaw skills should feel intentional, not like a raw CLI dump.", [interface_label],),
-            self._rule_card("DR-004", candidate_info.candidate.name, "DESIGN_DECISION", "Carry the upstream philosophy forward", "MEDIUM", "If the upstream repo solves the same user need, preserve its core design tradeoff rather than rewriting it from scratch.", ["Keep the design philosophy explicit in SKILL.md", "Adapt without erasing the why"], ["Copy functionality while dropping the rationale"], design_philosophy, [need_profile.intent],),
-            self._rule_card("DR-005", candidate_info.candidate.name, "DESIGN_DECISION", "Ship limits together with capability", "LOW", "If coverage is partial, state the missing edges in LIMITATIONS.md instead of pretending full support.", ["Mark unsupported cases", "List unresolved conflicts"], ["Imply complete domain coverage"], "Doramagic values honest partial coverage over invented certainty.", ["LIMITATIONS.md"],),
+            self._rule_card(
+                "DR-001",
+                candidate_info.candidate.name,
+                "DEFAULT_BEHAVIOR",
+                "Keep the skill local-first",
+                "HIGH",
+                "If a feature can run without a hosted dependency, prefer local execution and storage.",
+                ["Store data under ~/clawd/", "Keep dependencies minimal"],
+                ["Assume a cloud service is always available"],
+                "OpenClaw skills must work even when external APIs are unavailable.",
+                ["repo_facts.json", "README"],
+            ),
+            self._rule_card(
+                "DR-002",
+                candidate_info.candidate.name,
+                "DEFAULT_BEHAVIOR",
+                "Preserve a visible data model",
+                "MEDIUM",
+                "If the skill stores structured state, use a human-inspectable format or document the storage contract.",
+                ["Keep JSON/SQLite schemas discoverable", "Explain what each stored record means"],
+                ["Hide durable state in undocumented temp files"],
+                "Users need to inspect and trust the artifact Doramagic produces.",
+                [storage_label],
+            ),
+            self._rule_card(
+                "DR-003",
+                candidate_info.candidate.name,
+                "DEFAULT_BEHAVIOR",
+                "Bound the interaction surface",
+                "MEDIUM",
+                "If an upstream project exposes many entrypoints, keep only the smallest read/write/exec workflow needed for the skill.",
+                ["Choose one clear primary workflow", "Document the supported commands"],
+                ["Mirror every upstream command just because it exists"],
+                "OpenClaw skills should feel intentional, not like a raw CLI dump.",
+                [interface_label],
+            ),
+            self._rule_card(
+                "DR-004",
+                candidate_info.candidate.name,
+                "DESIGN_DECISION",
+                "Carry the upstream philosophy forward",
+                "MEDIUM",
+                "If the upstream repo solves the same user need, preserve its core design tradeoff rather than rewriting it from scratch.",
+                [
+                    "Keep the design philosophy explicit in SKILL.md",
+                    "Adapt without erasing the why",
+                ],
+                ["Copy functionality while dropping the rationale"],
+                design_philosophy,
+                [need_profile.intent],
+            ),
+            self._rule_card(
+                "DR-005",
+                candidate_info.candidate.name,
+                "DESIGN_DECISION",
+                "Ship limits together with capability",
+                "LOW",
+                "If coverage is partial, state the missing edges in LIMITATIONS.md instead of pretending full support.",
+                ["Mark unsupported cases", "List unresolved conflicts"],
+                ["Imply complete domain coverage"],
+                "Doramagic values honest partial coverage over invented certainty.",
+                ["LIMITATIONS.md"],
+            ),
         ]
 
         gotchas = [
-            self._rule_card("DR-101", candidate_info.candidate.name, "COMMUNITY_GOTCHA", "Path assumptions drift across machines", "HIGH", "If a repo writes relative files implicitly, packaging it as a skill can break once the working directory changes.", ["Normalize all durable paths under ~/clawd/", "Document where data lives"], ["Assume the runtime CWD always matches the upstream project"], "Community-style integrations fail most often at file path boundaries.", ["SIG-001", candidate_info.candidate.url],),
-            self._rule_card("DR-102", candidate_info.candidate.name, "COMMUNITY_GOTCHA", "Schema changes need migrations", "MEDIUM", "If the stored record evolves, old user data becomes unreadable unless the skill keeps a compatibility path.", ["Version stored records", "Handle missing fields defensively"], ["Rewrite schemas in place without a guard"], "Open-source maintenance pain often hides in silent schema drift.", ["SIG-002", storage_label],),
-            self._rule_card("DR-103", candidate_info.candidate.name, "COMMUNITY_GOTCHA", "Operator expectations differ from app assumptions", "MEDIUM", "If the upstream app assumes a full web UI or service process, the skill wrapper must shrink that expectation to a single conversational workflow.", ["Keep the skill scope narrow", "State omitted surfaces in LIMITATIONS.md"], ["Expose untestable UI-only behavior as if it were supported"], "Skill users experience the product through one tool call at a time.", [candidate_info.candidate.url],),
+            self._rule_card(
+                "DR-101",
+                candidate_info.candidate.name,
+                "COMMUNITY_GOTCHA",
+                "Path assumptions drift across machines",
+                "HIGH",
+                "If a repo writes relative files implicitly, packaging it as a skill can break once the working directory changes.",
+                ["Normalize all durable paths under ~/clawd/", "Document where data lives"],
+                ["Assume the runtime CWD always matches the upstream project"],
+                "Community-style integrations fail most often at file path boundaries.",
+                ["SIG-001", candidate_info.candidate.url],
+            ),
+            self._rule_card(
+                "DR-102",
+                candidate_info.candidate.name,
+                "COMMUNITY_GOTCHA",
+                "Schema changes need migrations",
+                "MEDIUM",
+                "If the stored record evolves, old user data becomes unreadable unless the skill keeps a compatibility path.",
+                ["Version stored records", "Handle missing fields defensively"],
+                ["Rewrite schemas in place without a guard"],
+                "Open-source maintenance pain often hides in silent schema drift.",
+                ["SIG-002", storage_label],
+            ),
+            self._rule_card(
+                "DR-103",
+                candidate_info.candidate.name,
+                "COMMUNITY_GOTCHA",
+                "Operator expectations differ from app assumptions",
+                "MEDIUM",
+                "If the upstream app assumes a full web UI or service process, the skill wrapper must shrink that expectation to a single conversational workflow.",
+                ["Keep the skill scope narrow", "State omitted surfaces in LIMITATIONS.md"],
+                ["Expose untestable UI-only behavior as if it were supported"],
+                "Skill users experience the product through one tool call at a time.",
+                [candidate_info.candidate.url],
+            ),
         ]
 
         expert_narrative = self._render_expert_narrative(
@@ -1281,7 +1468,19 @@ class DoramagicProductPipeline:
         community_wisdom = self._render_community_wisdom(candidate_info, gotchas)
         module_map = self._render_module_map(candidate_info, repo_scan, design_philosophy)
 
-        self._write_extraction_files(project_dir, candidate_info, design_philosophy, mental_model, concepts, workflows, rules, gotchas, expert_narrative, community_wisdom, module_map)
+        self._write_extraction_files(
+            project_dir,
+            candidate_info,
+            design_philosophy,
+            mental_model,
+            concepts,
+            workflows,
+            rules,
+            gotchas,
+            expert_narrative,
+            community_wisdom,
+            module_map,
+        )
         self._try_subprocess(
             [
                 "python3",
@@ -1322,7 +1521,7 @@ class DoramagicProductPipeline:
             soul_dir / "00-soul.md",
             "\n".join(
                 [
-                    "# {0} — 灵魂".format(candidate_info.candidate.name),
+                    f"# {candidate_info.candidate.name} — 灵魂",
                     "",
                     "## 1. 解决什么问题？",
                     candidate_info.description or candidate_info.candidate.contribution,
@@ -1337,10 +1536,7 @@ class DoramagicProductPipeline:
                     "Extract upstream patterns, compare them, then compile the stable overlap into an OpenClaw skill.",
                     "",
                     "## 5. 一句话总结",
-                    "{0} helps Doramagic learn a reusable {1} pattern.".format(
-                        candidate_info.candidate.name,
-                        candidate_info.candidate.name,
-                    ),
+                    f"{candidate_info.candidate.name} helps Doramagic learn a reusable {candidate_info.candidate.name} pattern.",
                     "",
                     "## 6. 设计哲学",
                     design_philosophy,
@@ -1352,11 +1548,20 @@ class DoramagicProductPipeline:
             ),
         )
         for concept in concepts:
-            _write_text(soul_dir / "cards" / "concepts" / "{0}.md".format(concept["card_id"]), self._render_concept_card(candidate_info.candidate.name, concept))
+            _write_text(
+                soul_dir / "cards" / "concepts" / "{0}.md".format(concept["card_id"]),
+                self._render_concept_card(candidate_info.candidate.name, concept),
+            )
         for workflow in workflows:
-            _write_text(soul_dir / "cards" / "workflows" / "{0}.md".format(workflow["card_id"]), self._render_workflow_card(candidate_info.candidate.name, workflow))
+            _write_text(
+                soul_dir / "cards" / "workflows" / "{0}.md".format(workflow["card_id"]),
+                self._render_workflow_card(candidate_info.candidate.name, workflow),
+            )
         for rule in list(rules) + list(gotchas):
-            _write_text(soul_dir / "cards" / "rules" / "{0}.md".format(rule["card_id"]), self._render_rule_card(candidate_info.candidate.name, rule))
+            _write_text(
+                soul_dir / "cards" / "rules" / "{0}.md".format(rule["card_id"]),
+                self._render_rule_card(candidate_info.candidate.name, rule),
+            )
         _write_text(soul_dir / "expert_narrative.md", expert_narrative)
         _write_text(soul_dir / "community-wisdom.md", community_wisdom)
         _write_text(soul_dir / "module-map.md", module_map)
@@ -1366,8 +1571,8 @@ class DoramagicProductPipeline:
             "---",
             "card_type: concept_card",
             "card_id: {0}".format(concept["card_id"]),
-            "repo: {0}".format(repo_name),
-            "title: \"{0}\"".format(concept["title"]),
+            f"repo: {repo_name}",
+            'title: "{0}"'.format(concept["title"]),
             "---",
             "",
             "## Identity",
@@ -1382,15 +1587,23 @@ class DoramagicProductPipeline:
         for index in range(max_rows):
             left = concept["is_items"][index] if index < len(concept["is_items"]) else ""
             right = concept["is_not_items"][index] if index < len(concept["is_not_items"]) else ""
-            lines.append("| {0} | {1} |".format(left, right))
-        lines.extend(["", "## Key Attributes", "", "| Attribute | Type | Purpose |", "|-----------|------|---------|"])
+            lines.append(f"| {left} | {right} |")
+        lines.extend(
+            [
+                "",
+                "## Key Attributes",
+                "",
+                "| Attribute | Type | Purpose |",
+                "|-----------|------|---------|",
+            ]
+        )
         for attribute, purpose in concept["attributes"]:
-            lines.append("| {0} | str | {1} |".format(attribute, purpose))
+            lines.append(f"| {attribute} | str | {purpose} |")
         lines.extend(["", "## Boundaries"])
-        lines.extend("- {0}".format(item) for item in concept["boundaries"])
+        lines.extend(f"- {item}" for item in concept["boundaries"])
         lines.extend(["", "## Evidence"])
         for evidence in concept["evidence"]:
-            lines.append("- {0}".format(evidence.path))
+            lines.append(f"- {evidence.path}")
         lines.append("")
         return "\n".join(lines)
 
@@ -1399,14 +1612,14 @@ class DoramagicProductPipeline:
             "---",
             "card_type: workflow_card",
             "card_id: {0}".format(workflow["card_id"]),
-            "repo: {0}".format(repo_name),
-            "title: \"{0}\"".format(workflow["title"]),
+            f"repo: {repo_name}",
+            'title: "{0}"'.format(workflow["title"]),
             "---",
             "",
             "## Steps",
         ]
         for index, (step, source) in enumerate(workflow["steps"], start=1):
-            lines.append("{0}. {1} ({2})".format(index, step, source))
+            lines.append(f"{index}. {step} ({source})")
         lines.extend(
             [
                 "",
@@ -1422,7 +1635,7 @@ class DoramagicProductPipeline:
                 "## Failure Modes",
             ]
         )
-        lines.extend("- {0}".format(item) for item in workflow["failure_modes"])
+        lines.extend(f"- {item}" for item in workflow["failure_modes"])
         lines.append("")
         return "\n".join(lines)
 
@@ -1431,21 +1644,21 @@ class DoramagicProductPipeline:
             "---",
             "card_type: decision_rule_card",
             "card_id: {0}".format(rule["card_id"]),
-            "repo: {0}".format(repo_name),
+            f"repo: {repo_name}",
             "type: {0}".format(rule["type"]),
-            "title: \"{0}\"".format(rule["title"]),
+            'title: "{0}"'.format(rule["title"]),
             "severity: {0}".format(rule["severity"]),
             "rule: |",
         ]
         for line in rule["rule"].splitlines():
-            lines.append("  {0}".format(line))
+            lines.append(f"  {line}")
         lines.append("do:")
-        lines.extend("  - \"{0}\"".format(item) for item in rule["do"])
+        lines.extend(f'  - "{item}"' for item in rule["do"])
         lines.append("dont:")
-        lines.extend("  - \"{0}\"".format(item) for item in rule["dont"])
+        lines.extend(f'  - "{item}"' for item in rule["dont"])
         lines.append("confidence: 0.82")
         lines.append("sources:")
-        lines.extend("  - \"{0}\"".format(source) for source in rule["sources"])
+        lines.extend(f'  - "{source}"' for source in rule["sources"])
         lines.extend(
             [
                 "---",
@@ -1487,7 +1700,7 @@ class DoramagicProductPipeline:
                 )
             )
         sections = [
-            "# {0} — AI 知识注入".format(candidate_info.candidate.name),
+            f"# {candidate_info.candidate.name} — AI 知识注入",
             "",
             "## 设计哲学",
             design_philosophy,
@@ -1503,9 +1716,11 @@ class DoramagicProductPipeline:
         sections.append("")
         return "\n".join(sections)
 
-    def _render_community_wisdom(self, candidate_info: CandidateInfo, gotchas: Sequence[dict]) -> str:
+    def _render_community_wisdom(
+        self, candidate_info: CandidateInfo, gotchas: Sequence[dict]
+    ) -> str:
         lines = [
-            "# 社区智慧：{0}".format(candidate_info.candidate.name),
+            f"# 社区智慧：{candidate_info.candidate.name}",
             "",
             "## 社区集体认知",
             "这类项目最常见的集体认知是：真正困难的不是核心功能，而是把上游应用的默认假设压缩成可复用、可迁移、可维护的日常工作流。",
@@ -1538,18 +1753,22 @@ class DoramagicProductPipeline:
         )
         return "\n".join(lines)
 
-    def _render_module_map(self, candidate_info: CandidateInfo, repo_scan: RepoScan, design_philosophy: str) -> str:
+    def _render_module_map(
+        self, candidate_info: CandidateInfo, repo_scan: RepoScan, design_philosophy: str
+    ) -> str:
         lines = [
-            "# 模块地图：{0}".format(candidate_info.candidate.name),
+            f"# 模块地图：{candidate_info.candidate.name}",
             "",
-            "*{0}*".format(design_philosophy),
+            f"*{design_philosophy}*",
             "",
             "## 模块列表",
             "",
             "### M-001：Interface",
             "**职责**：承接用户输入并把它翻译成领域操作。",
             "**关键文件**：",
-            "- `{0}`：最可能的入口面。".format(repo_scan.entrypoints[0] if repo_scan.entrypoints else "README.md"),
+            "- `{0}`：最可能的入口面。".format(
+                repo_scan.entrypoints[0] if repo_scan.entrypoints else "README.md"
+            ),
             "**依赖**：Domain Logic",
             "**被依赖**：用户或上层自动化流程",
             "**对外接口**：exec/read/write 组合",
@@ -1565,7 +1784,9 @@ class DoramagicProductPipeline:
             "### M-003：Storage",
             "**职责**：保存和读取 durable state。",
             "**关键文件**：",
-            "- `{0}`：最显著的存储痕迹。".format(repo_scan.storage_paths[0] if repo_scan.storage_paths else "~/clawd/"),
+            "- `{0}`：最显著的存储痕迹。".format(
+                repo_scan.storage_paths[0] if repo_scan.storage_paths else "~/clawd/"
+            ),
             "**依赖**：无依赖（基础模块）",
             "**被依赖**：大多数模块",
             "**对外接口**：结构化读写",
@@ -1592,8 +1813,14 @@ class DoramagicProductPipeline:
             first = candidates[0]
             if kind == "file_line" and not first.startswith("http"):
                 return EvidenceRef(kind="file_line", path=str(first), start_line=1, end_line=1)
-            return EvidenceRef(kind="artifact_ref", path=str(first), artifact_name=Path(str(first)).name)
-        return EvidenceRef(kind="artifact_ref", path=str(project_dir / "artifacts" / fallback_label), artifact_name=fallback_label)
+            return EvidenceRef(
+                kind="artifact_ref", path=str(first), artifact_name=Path(str(first)).name
+            )
+        return EvidenceRef(
+            kind="artifact_ref",
+            path=str(project_dir / "artifacts" / fallback_label),
+            artifact_name=fallback_label,
+        )
 
     def _workflow_ref(self, candidates: Sequence[str]) -> str:
         if candidates:
@@ -1646,7 +1873,7 @@ class DoramagicProductPipeline:
     def _build_repo_ref(self, candidate_info: CandidateInfo, repo_dir: Path) -> RepoRef:
         return RepoRef(
             repo_id=_slugify(candidate_info.candidate.name),
-            full_name="{0}/{1}".format(candidate_info.owner, candidate_info.repo)
+            full_name=f"{candidate_info.owner}/{candidate_info.repo}"
             if candidate_info.owner and candidate_info.repo
             else candidate_info.candidate.name,
             url=candidate_info.candidate.url,
@@ -1667,7 +1894,7 @@ class DoramagicProductPipeline:
         source_card_ids = [concept["card_id"] for concept in extraction.concepts[:2]]
         atoms.append(
             KnowledgeAtom(
-                atom_id="A-{0}-001".format(repo_ref.repo_id.upper()),
+                atom_id=f"A-{repo_ref.repo_id.upper()}-001",
                 knowledge_type="capability",
                 subject=domain_label,
                 predicate="supports",
@@ -1675,13 +1902,17 @@ class DoramagicProductPipeline:
                 scope="feature",
                 normative_force="must",
                 confidence="high",
-                evidence_refs=[EvidenceRef(kind="artifact_ref", path="soul/00-soul.md", artifact_name="00-soul.md")],
+                evidence_refs=[
+                    EvidenceRef(
+                        kind="artifact_ref", path="soul/00-soul.md", artifact_name="00-soul.md"
+                    )
+                ],
                 source_card_ids=source_card_ids,
             )
         )
         atoms.append(
             KnowledgeAtom(
-                atom_id="A-{0}-002".format(repo_ref.repo_id.upper()),
+                atom_id=f"A-{repo_ref.repo_id.upper()}-002",
                 knowledge_type="constraint",
                 subject=domain_label,
                 predicate="stored_in",
@@ -1689,13 +1920,17 @@ class DoramagicProductPipeline:
                 scope="storage",
                 normative_force="must",
                 confidence="medium",
-                evidence_refs=[EvidenceRef(kind="artifact_ref", path="repo_facts.json", artifact_name="repo_facts.json")],
+                evidence_refs=[
+                    EvidenceRef(
+                        kind="artifact_ref", path="repo_facts.json", artifact_name="repo_facts.json"
+                    )
+                ],
                 source_card_ids=["CC-002"],
             )
         )
         atoms.append(
             KnowledgeAtom(
-                atom_id="A-{0}-003".format(repo_ref.repo_id.upper()),
+                atom_id=f"A-{repo_ref.repo_id.upper()}-003",
                 knowledge_type="interface",
                 subject=domain_label,
                 predicate="accepts",
@@ -1703,13 +1938,19 @@ class DoramagicProductPipeline:
                 scope="runtime",
                 normative_force="must",
                 confidence="medium",
-                evidence_refs=[EvidenceRef(kind="artifact_ref", path="soul/module-map.md", artifact_name="module-map.md")],
+                evidence_refs=[
+                    EvidenceRef(
+                        kind="artifact_ref",
+                        path="soul/module-map.md",
+                        artifact_name="module-map.md",
+                    )
+                ],
                 source_card_ids=["CC-003", "WF-001"],
             )
         )
         atoms.append(
             KnowledgeAtom(
-                atom_id="A-{0}-004".format(repo_ref.repo_id.upper()),
+                atom_id=f"A-{repo_ref.repo_id.upper()}-004",
                 knowledge_type="rationale",
                 subject=domain_label,
                 predicate="prefers",
@@ -1717,13 +1958,19 @@ class DoramagicProductPipeline:
                 scope="design",
                 normative_force="should",
                 confidence="medium",
-                evidence_refs=[EvidenceRef(kind="artifact_ref", path="soul/expert_narrative.md", artifact_name="expert_narrative.md")],
+                evidence_refs=[
+                    EvidenceRef(
+                        kind="artifact_ref",
+                        path="soul/expert_narrative.md",
+                        artifact_name="expert_narrative.md",
+                    )
+                ],
                 source_card_ids=["DR-004"],
             )
         )
         atoms.append(
             KnowledgeAtom(
-                atom_id="A-{0}-005".format(repo_ref.repo_id.upper()),
+                atom_id=f"A-{repo_ref.repo_id.upper()}-005",
                 knowledge_type="failure",
                 subject=domain_label,
                 predicate="fails_when",
@@ -1731,7 +1978,13 @@ class DoramagicProductPipeline:
                 scope="operations",
                 normative_force="should",
                 confidence="medium",
-                evidence_refs=[EvidenceRef(kind="artifact_ref", path="soul/community-wisdom.md", artifact_name="community-wisdom.md")],
+                evidence_refs=[
+                    EvidenceRef(
+                        kind="artifact_ref",
+                        path="soul/community-wisdom.md",
+                        artifact_name="community-wisdom.md",
+                    )
+                ],
                 source_card_ids=["DR-101"],
             )
         )
@@ -1757,9 +2010,19 @@ class DoramagicProductPipeline:
         )
 
     def _build_project_summary(self, fingerprint: ProjectFingerprint) -> ExtractedProjectSummary:
-        top_capabilities = [atom.object for atom in fingerprint.knowledge_atoms if atom.knowledge_type == "capability"][:3]
-        top_constraints = [atom.object for atom in fingerprint.knowledge_atoms if atom.knowledge_type == "constraint"][:3]
-        top_failures = [atom.object for atom in fingerprint.knowledge_atoms if atom.knowledge_type == "failure"][:3]
+        top_capabilities = [
+            atom.object
+            for atom in fingerprint.knowledge_atoms
+            if atom.knowledge_type == "capability"
+        ][:3]
+        top_constraints = [
+            atom.object
+            for atom in fingerprint.knowledge_atoms
+            if atom.knowledge_type == "constraint"
+        ][:3]
+        top_failures = [
+            atom.object for atom in fingerprint.knowledge_atoms if atom.knowledge_type == "failure"
+        ][:3]
         evidence_refs = []
         for atom in fingerprint.knowledge_atoms:
             evidence_refs.extend(atom.evidence_refs[:1])
@@ -1798,10 +2061,12 @@ class DoramagicProductPipeline:
         discovery_result: DiscoveryResult,
         project_packets: Sequence[ProjectPacket],
         run_dir: Path,
-    ) -> Tuple[SynthesisReportData, Path, Path, Path, dict, List[str]]:
+    ) -> tuple[SynthesisReportData, Path, Path, Path, dict, list[str]]:
         warnings = []
         if len(project_packets) < 2:
-            raise ValueError("At least two project packets are required to compare and synthesize knowledge.")
+            raise ValueError(
+                "At least two project packets are required to compare and synthesize knowledge."
+            )
 
         compare_dir = run_dir / "compare"
         synthesis_dir = run_dir / "synthesis"
@@ -1819,7 +2084,9 @@ class DoramagicProductPipeline:
         if compare_envelope.data is None:
             raise ValueError("cross-project.compare did not produce output.")
 
-        community_knowledge = CommunityKnowledge(skills=[], tutorials=[packet.community_item for packet in project_packets], use_cases=[])
+        community_knowledge = CommunityKnowledge(
+            skills=[], tutorials=[packet.community_item for packet in project_packets], use_cases=[]
+        )
         synthesis_input = SynthesisInput(
             need_profile=need_profile,
             discovery_result=discovery_result,
@@ -1852,10 +2119,18 @@ class DoramagicProductPipeline:
             if item.is_file():
                 shutil.copy2(item, delivery_dir / item.name)
 
-        skill_key = _slugify(need_profile.intent or "") or _domain_id_from_need(need_profile) or "doramagic-skill"
-        skill_md = self._render_skill_bundle(skill_key, need_profile, project_packets, enriched_report)
+        skill_key = (
+            _slugify(need_profile.intent or "")
+            or _domain_id_from_need(need_profile)
+            or "doramagic-skill"
+        )
+        skill_md = self._render_skill_bundle(
+            skill_key, need_profile, project_packets, enriched_report
+        )
         provenance_md = self._render_provenance(enriched_report, project_packets)
-        limitations_md = self._render_limitations(need_profile, discovery_result, project_packets, enriched_report, warnings)
+        limitations_md = self._render_limitations(
+            need_profile, discovery_result, project_packets, enriched_report, warnings
+        )
         readme_md = self._render_delivery_readme(skill_key, need_profile, project_packets)
         _write_text(delivery_dir / "SKILL.md", skill_md)
         _write_text(delivery_dir / "PROVENANCE.md", provenance_md)
@@ -1900,7 +2175,9 @@ class DoramagicProductPipeline:
             for atom in packet.fingerprint.knowledge_atoms:
                 for ref in atom.evidence_refs:
                     if ref.kind == "file_line":
-                        url_pool.append("{0}/blob/{1}/{2}#L{3}".format(packet.repo_ref.url, packet.repo_ref.default_branch, ref.path, ref.start_line or 1))
+                        url_pool.append(
+                            f"{packet.repo_ref.url}/blob/{packet.repo_ref.default_branch}/{ref.path}#L{ref.start_line or 1}"
+                        )
                     else:
                         url_pool.append(str(packet.repo_ref.url))
 
@@ -1916,10 +2193,10 @@ class DoramagicProductPipeline:
             for url in url_pool[:4]:
                 if url not in source_refs:
                     source_refs.append(url)
-            
+
             # Map 'option' to 'exclude' for the final bundle if it wasn't already handled
             decision_value = "exclude" if decision.decision == "option" else decision.decision
-            
+
             return SynthesisDecision(
                 decision_id=decision.decision_id,
                 statement=decision.statement,
@@ -1960,20 +2237,20 @@ class DoramagicProductPipeline:
         project_packets: Sequence[ProjectPacket],
     ) -> SynthesisReportData:
         system_prompt = "You are a senior architect. Provide concise rationales for knowledge inclusion/exclusion."
-        
+
         statements = []
         for d in report.consensus + report.unique_knowledge:
             statements.append(f"- {d.statement}")
-            
+
         user_prompt = (
             "Based on these findings from multiple projects, provide a 1-sentence rationale for each. "
             "Focus on WHY it's important for a portable AI skill.\n\n"
             "Findings:\n{0}".format("\n".join(statements[:15]))
         )
-        
+
         raw = self.llm_backend.complete_text(system_prompt, user_prompt, max_tokens=1500)
         lines = raw.splitlines()
-        
+
         # Map back rationales (best effort)
         idx = 0
         for d in report.consensus + report.unique_knowledge:
@@ -1986,7 +2263,9 @@ class DoramagicProductPipeline:
         return report
 
     def _prepare_compile_ready_report(self, report: SynthesisReportData) -> SynthesisReportData:
-        selected = [decision for decision in report.selected_knowledge if decision.decision == "include"]
+        selected = [
+            decision for decision in report.selected_knowledge if decision.decision == "include"
+        ]
         if not selected:
             selected = [
                 SynthesisDecision(
@@ -1999,11 +2278,15 @@ class DoramagicProductPipeline:
                 )
                 for decision in (report.consensus + report.unique_knowledge)[:3]
             ]
-        excluded = [decision for decision in report.excluded_knowledge if decision.decision == "exclude"]
+        excluded = [
+            decision for decision in report.excluded_knowledge if decision.decision == "exclude"
+        ]
         return SynthesisReportData(
             consensus=[decision for decision in report.consensus if decision.decision == "include"],
             conflicts=[],
-            unique_knowledge=[decision for decision in report.unique_knowledge if decision.decision != "option"],
+            unique_knowledge=[
+                decision for decision in report.unique_knowledge if decision.decision != "option"
+            ],
             selected_knowledge=selected,
             excluded_knowledge=excluded,
             open_questions=list(report.open_questions),
@@ -2020,7 +2303,9 @@ class DoramagicProductPipeline:
         narrative = ""
         if self.llm_backend.enabled:
             try:
-                narrative = self._generate_skill_narrative(need_profile, project_packets, synthesis_report)
+                narrative = self._generate_skill_narrative(
+                    need_profile, project_packets, synthesis_report
+                )
             except Exception:
                 pass
 
@@ -2033,16 +2318,18 @@ class DoramagicProductPipeline:
                 if packet.extraction.design_philosophy in seen_philosophies:
                     continue
                 seen_philosophies.add(packet.extraction.design_philosophy)
-                why_sections.append("- {0}".format(packet.extraction.design_philosophy))
+                why_sections.append(f"- {packet.extraction.design_philosophy}")
 
         gotchas = []
         for packet in project_packets:
             for gotcha in packet.extraction.gotchas[:1]:
-                gotchas.append("- {0}: {1}".format(packet.candidate_info.candidate.name, gotcha["title"]))
+                gotchas.append(
+                    "- {0}: {1}".format(packet.candidate_info.candidate.name, gotcha["title"])
+                )
 
         workflow_lines = []
         for decision in synthesis_report.selected_knowledge[:6]:
-            workflow_lines.append("- {0}".format(decision.statement))
+            workflow_lines.append(f"- {decision.statement}")
 
         keyword_line = ", ".join(need_profile.keywords)
         lines = [
@@ -2050,13 +2337,16 @@ class DoramagicProductPipeline:
             "# {0}".format(skill_key.replace("-", " ").title()),
             "",
             "## Purpose",
-            "{0}".format(need_profile.intent or need_profile.raw_input),
+            f"{need_profile.intent or need_profile.raw_input}",
             "",
-            "Keywords: {0}".format(keyword_line),
+            f"Keywords: {keyword_line}",
             "",
             "## Why This Skill Exists",
         ]
-        lines.extend(why_sections or ["- Preserve the strongest open-source patterns instead of rebuilding from scratch."])
+        lines.extend(
+            why_sections
+            or ["- Preserve the strongest open-source patterns instead of rebuilding from scratch."]
+        )
         lines.extend(
             [
                 "",
@@ -2066,18 +2356,30 @@ class DoramagicProductPipeline:
                 "## Workflow",
             ]
         )
-        lines.extend(workflow_lines or ["- Read the user request, write normalized state, then return the next relevant result."])
+        lines.extend(
+            workflow_lines
+            or [
+                "- Read the user request, write normalized state, then return the next relevant result."
+            ]
+        )
         lines.extend(
             [
                 "",
                 "## Storage",
-                "- Store runtime data under {0}{1}/".format(self.platform_rules.storage_prefix.rstrip("/") + "/", skill_key),
+                "- Store runtime data under {0}{1}/".format(
+                    self.platform_rules.storage_prefix.rstrip("/") + "/", skill_key
+                ),
                 "- Keep durable artifacts human-inspectable whenever possible.",
                 "",
                 "## Community Gotchas",
             ]
         )
-        lines.extend(gotchas or ["- Surface path, schema, and environment assumptions early so the operator can correct them before data is written."])
+        lines.extend(
+            gotchas
+            or [
+                "- Surface path, schema, and environment assumptions early so the operator can correct them before data is written."
+            ]
+        )
         lines.extend(
             [
                 "",
@@ -2096,16 +2398,20 @@ class DoramagicProductPipeline:
         synthesis_report: SynthesisReportData,
     ) -> str:
         system_prompt = "You are a technical writer. Write a compelling 'Why This Skill Exists' section for an OpenClaw skill."
-        
+
         context = []
         for packet in project_packets[:2]:
-            context.append(f"Project {packet.candidate_info.candidate.name} philosophy: {packet.extraction.design_philosophy}")
-            
+            context.append(
+                f"Project {packet.candidate_info.candidate.name} philosophy: {packet.extraction.design_philosophy}"
+            )
+
         user_prompt = (
             "Write a 3-sentence expert narrative on the design philosophy of a skill for: {0}\n\n"
-            "Reference these upstream philosophies:\n{1}".format(need_profile.intent, "\n".join(context))
+            "Reference these upstream philosophies:\n{1}".format(
+                need_profile.intent, "\n".join(context)
+            )
         )
-        
+
         return self.llm_backend.complete_text(system_prompt, user_prompt, max_tokens=500)
 
     def _render_provenance(
@@ -2118,14 +2424,16 @@ class DoramagicProductPipeline:
             "",
             "Selected knowledge and its upstream traceability:",
         ]
-        repo_urls = {packet.repo_ref.repo_id: str(packet.repo_ref.url) for packet in project_packets}
+        repo_urls = {
+            packet.repo_ref.repo_id: str(packet.repo_ref.url) for packet in project_packets
+        }
         for decision in synthesis_report.selected_knowledge:
             lines.extend(
                 [
                     "",
-                    "## {0}".format(decision.decision_id),
-                    "- Statement: {0}".format(decision.statement),
-                    "- Rationale: {0}".format(decision.rationale),
+                    f"## {decision.decision_id}",
+                    f"- Statement: {decision.statement}",
+                    f"- Rationale: {decision.rationale}",
                     "- Source Refs: {0}".format(", ".join(decision.source_refs)),
                 ]
             )
@@ -2133,11 +2441,26 @@ class DoramagicProductPipeline:
             if not urls:
                 urls = list(repo_urls.values())
             lines.append("- Source URLs: {0}".format(", ".join(urls[:4])))
-            supporting = [packet.repo_ref.repo_id for packet in project_packets if packet.repo_ref.repo_id in "".join(decision.source_refs)]
+            supporting = [
+                packet.repo_ref.repo_id
+                for packet in project_packets
+                if packet.repo_ref.repo_id in "".join(decision.source_refs)
+            ]
             if not supporting:
                 supporting = [packet.repo_ref.repo_id for packet in project_packets]
             lines.append("- Supporting Projects: {0}".format(", ".join(sorted(set(supporting)))))
-            lines.append("- License: {0}".format(", ".join(sorted({packet.candidate_info.license_name or "unknown" for packet in project_packets}))))
+            lines.append(
+                "- License: {0}".format(
+                    ", ".join(
+                        sorted(
+                            {
+                                packet.candidate_info.license_name or "unknown"
+                                for packet in project_packets
+                            }
+                        )
+                    )
+                )
+            )
         lines.append("")
         return "\n".join(lines)
 
@@ -2149,34 +2472,36 @@ class DoramagicProductPipeline:
         synthesis_report: SynthesisReportData,
         warnings: Sequence[str],
     ) -> str:
-        coverage = "{0}/{1}".format(len(project_packets), max(len(discovery_result.candidates), 1))
+        coverage = f"{len(project_packets)}/{max(len(discovery_result.candidates), 1)}"
         lines = [
             "# Limitations",
             "",
             "## Coverage",
-            "- Doramagic extracted {0} real project packets for this run.".format(coverage),
-            "- Need intent: {0}".format(need_profile.intent),
+            f"- Doramagic extracted {coverage} real project packets for this run.",
+            f"- Need intent: {need_profile.intent}",
             "",
             "## Excluded Knowledge",
         ]
         if synthesis_report.excluded_knowledge:
             for decision in synthesis_report.excluded_knowledge:
-                lines.append("- {0}: {1}".format(decision.decision_id, decision.statement))
-                lines.append("  Reason: {0}".format(decision.rationale))
+                lines.append(f"- {decision.decision_id}: {decision.statement}")
+                lines.append(f"  Reason: {decision.rationale}")
         else:
             lines.append("- No explicit exclusions were required after synthesis.")
 
         lines.extend(["", "## Conflicts"])
         if synthesis_report.conflicts:
             for conflict in synthesis_report.conflicts:
-                lines.append("- {0}: {1}".format(conflict.conflict_id, conflict.title))
-                lines.append("  Recommendation: {0}".format(conflict.recommended_resolution))
+                lines.append(f"- {conflict.conflict_id}: {conflict.title}")
+                lines.append(f"  Recommendation: {conflict.recommended_resolution}")
         else:
-            lines.append("- No remaining cross-project conflicts are carried into the delivered bundle.")
+            lines.append(
+                "- No remaining cross-project conflicts are carried into the delivered bundle."
+            )
 
         lines.extend(["", "## Operational Notes"])
         for warning in warnings:
-            lines.append("- {0}".format(warning))
+            lines.append(f"- {warning}")
         if not warnings:
             lines.append("- No extra operational warnings were recorded.")
         lines.append("")
@@ -2199,7 +2524,9 @@ class DoramagicProductPipeline:
             "## Reference Projects",
         ]
         for packet in project_packets:
-            lines.append("- {0} — {1}".format(packet.candidate_info.candidate.name, packet.candidate_info.candidate.url))
+            lines.append(
+                f"- {packet.candidate_info.candidate.name} — {packet.candidate_info.candidate.url}"
+            )
         lines.extend(
             [
                 "",
@@ -2237,16 +2564,20 @@ class DoramagicProductPipeline:
         need_profile = self.build_need_profile(user_input)
         _write_json(run_dir / "need_profile.json", _model_dump(need_profile))
 
-        discovery_result, candidate_infos, discovery_warnings = self.discover_candidates(need_profile)
+        discovery_result, candidate_infos, discovery_warnings = self.discover_candidates(
+            need_profile
+        )
         warnings.extend(discovery_warnings)
         _write_json(run_dir / "discovery_result.json", _model_dump(discovery_result))
 
-        project_packets, extraction_warnings = self.extract_projects(need_profile, run_dir, candidate_infos)
+        project_packets, extraction_warnings = self.extract_projects(
+            need_profile, run_dir, candidate_infos
+        )
         warnings.extend(extraction_warnings)
         if len(project_packets) < 2:
             raise RuntimeError(
                 "Doramagic needs at least two extractable projects to compare and synthesize. "
-                "Current run collected {0}.".format(len(project_packets))
+                f"Current run collected {len(project_packets)}."
             )
 
         community_payload = CommunityKnowledge(
@@ -2256,7 +2587,14 @@ class DoramagicProductPipeline:
         )
         _write_json(run_dir / "community_knowledge.json", _model_dump(community_payload))
 
-        synthesis_report, skill_path, provenance_path, limitations_path, validation_payload, phase_warnings = self.synthesize_delivery(
+        (
+            synthesis_report,
+            skill_path,
+            provenance_path,
+            limitations_path,
+            validation_payload,
+            phase_warnings,
+        ) = self.synthesize_delivery(
             need_profile,
             discovery_result,
             project_packets,
@@ -2307,7 +2645,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     parser = build_argument_parser()
     args = parser.parse_args(argv)
     pipeline = DoramagicProductPipeline(
@@ -2315,14 +2653,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         runs_dir=(_PROJECT_ROOT / args.runs_dir),
     )
     result = pipeline.run(args.user_input)
-    print("run_dir={0}".format(result.run_dir))
-    print("delivery_dir={0}".format(result.delivery_dir))
-    print("skill_md={0}".format(result.skill_path))
-    print("provenance_md={0}".format(result.provenance_path))
-    print("limitations_md={0}".format(result.limitations_path))
-    print("validation_status={0}".format(result.validation_status))
+    print(f"run_dir={result.run_dir}")
+    print(f"delivery_dir={result.delivery_dir}")
+    print(f"skill_md={result.skill_path}")
+    print(f"provenance_md={result.provenance_path}")
+    print(f"limitations_md={result.limitations_path}")
+    print(f"validation_status={result.validation_status}")
     if result.warnings:
-        print("warnings={0}".format(len(result.warnings)))
+        print(f"warnings={len(result.warnings)}")
         for item in result.warnings:
-            print("- {0}".format(item))
+            print(f"- {item}")
     return 0

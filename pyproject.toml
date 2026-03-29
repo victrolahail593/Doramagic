@@ -48,3 +48,5 @@ python_files = ["test_*.py"]
 # 以下大文件待第三优先级拆分，暂时忽略行长和部分 lint
 "packages/extraction/doramagic_extraction/stage15_agentic.py" = ["E501", "F841", "SIM103", "SIM105", "SIM108", "SIM113", "UP030"]
 "packages/extraction/doramagic_extraction/llm_stage_runner.py" = ["E501"]
+# doramagic_product 是 2328 行的并行管道，待第三优先级拆分
+"packages/doramagic_product/doramagic_product/pipeline.py" = ["E501", "UP030", "F524", "B007", "SIM102", "SIM103", "SIM105", "SIM108", "SIM110", "SIM113", "SIM118", "SIM910"]
