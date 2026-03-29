@@ -27,11 +27,11 @@ class DiscoveryRunner:
         excluded = []
 
         if routing and routing.route == "NAMED_PROJECT":
-            candidates = self._targeted_search(routing.project_names, routing.max_repos)
+            candidates = self._targeted_search(routing.project_names, routing.max_repos, config)
             search_evidence = [f"targeted:{name}" for name in routing.project_names]
         else:
             queries = need.github_queries or need.relevance_terms or need.keywords[:3]
-            candidates = self._broad_search(queries, need.max_projects)
+            candidates = self._broad_search(queries, need.max_projects, config)
             search_evidence = [f"broad:{query}" for query in queries[:3]]
 
         filtered = []
@@ -90,10 +90,22 @@ class DiscoveryRunner:
             ),
         )
 
-    def _targeted_search(self, names: list[str], limit: int) -> list:
+    def _emit_progress(self, config: object, query: str, candidate_count: int) -> None:
+        event_bus = getattr(config, "event_bus", None)
+        if event_bus is None:
+            return
+        event_bus.emit(
+            "sub_progress",
+            f"搜索 GitHub: '{query}'... 找到 {candidate_count} 个候选",
+            phase="PHASE_B",
+            meta={"query": query, "candidate_count": candidate_count},
+        )
+
+    def _targeted_search(self, names: list[str], limit: int, config: object) -> list:
         candidates = []
         for index, name in enumerate(names[:3]):
             results = search_github([name], top_k=4)
+            self._emit_progress(config, name, len(results))
             for rank, repo in enumerate(results):
                 stars = repo.get("stars", 0)
                 if stars < MIN_STARS:
@@ -112,7 +124,7 @@ class DiscoveryRunner:
                 break
         return candidates[:limit]
 
-    def _broad_search(self, queries: list[str], limit: int) -> list:
+    def _broad_search(self, queries: list[str], limit: int, config: object) -> list:
         merged = []
         seen = set()
         for query in queries[:3]:
@@ -120,6 +132,7 @@ class DiscoveryRunner:
                 results = search_github([query], top_k=max(4, limit))
             except Exception:
                 continue
+            self._emit_progress(config, query, len(results))
             for repo in results:
                 full_name = repo.get("name", "")
                 if not full_name or full_name in seen or repo.get("stars", 0) < MIN_STARS:

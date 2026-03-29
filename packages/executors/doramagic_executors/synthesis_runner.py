@@ -185,6 +185,17 @@ class SynthesisRunner:
             )
             if filtered is not None:
                 removed_count = len(real_decisions) - len(filtered)
+                event_bus = getattr(config, "event_bus", None)
+                if event_bus is not None:
+                    event_bus.emit(
+                        "sub_progress",
+                        f"评估 {len(real_decisions)} 条知识的质量... 过滤了 {removed_count} 条",
+                        phase="PHASE_D",
+                        meta={
+                            "knowledge_count": len(real_decisions),
+                            "filtered_count": removed_count,
+                        },
+                    )
                 if removed_count > 0:
                     warnings.append(
                         WarningItem(

@@ -97,11 +97,24 @@ class WorkerSupervisor:
         from concurrent.futures import FIRST_COMPLETED, wait
 
         envelopes: list[RepoExtractionEnvelope] = []
+        event_bus = getattr(config, "event_bus", None)
+        total = len(contexts)
         with ThreadPoolExecutor(max_workers=min(config.concurrency_limit, len(contexts))) as pool:
-            future_map = {
-                pool.submit(self._run_worker, context, adapter, config): context
-                for context in contexts
-            }
+            future_map = {}
+            for index, context in enumerate(contexts, start=1):
+                if event_bus is not None:
+                    event_bus.emit(
+                        "sub_progress",
+                        f"分析 {context.repo_name} ({index}/{total})",
+                        phase="PHASE_C",
+                        worker_id=context.worker_id,
+                        meta={
+                            "repo_name": context.repo_name,
+                            "index": index,
+                            "total": total,
+                        },
+                    )
+                future_map[pool.submit(self._run_worker, context, adapter, config)] = context
             pending = set(future_map.keys())
             while pending:
                 max_timeout = max(future_map[f].timeout_seconds for f in pending)

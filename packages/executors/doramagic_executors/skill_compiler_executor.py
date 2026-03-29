@@ -29,6 +29,23 @@ class SkillCompilerExecutor:
                 metrics=self._metrics(started),
             )
 
+        event_bus = getattr(config, "event_bus", None)
+        section_names = input.target_sections or [
+            "role",
+            "knowledge",
+            "workflow",
+            "anti_patterns",
+            "when_not_to_use",
+        ]
+        if event_bus is not None:
+            for section_name in section_names:
+                event_bus.emit(
+                    "sub_progress",
+                    f"编译 {section_name} section...",
+                    phase="PHASE_E",
+                    meta={"section_name": section_name},
+                )
+
         phase_dir = config.run_dir / "staging" / "phase_e"
         bundle = await build_compile_bundle(input, adapter, phase_dir)
 

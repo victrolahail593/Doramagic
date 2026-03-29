@@ -36,6 +36,16 @@ class ValidatorExecutor:
                 "blockers": ["missing_skill_md"],
             }
         )
+        event_bus = getattr(config, "event_bus", None)
+        if event_bus is not None:
+            for dimension, score in quality["dimension_scores"].items():
+                score_10 = round(score / 10, 1)
+                event_bus.emit(
+                    "sub_progress",
+                    f"质量评分: {dimension} = {score_10}/10",
+                    phase="PHASE_F",
+                    meta={"dimension": dimension, "score": score, "score_10": score_10},
+                )
 
         has_blockers = report.status == "BLOCKED" or any(
             not check.passed and check.severity == "blocking" for check in report.checks

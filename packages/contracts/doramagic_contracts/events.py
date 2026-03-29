@@ -26,6 +26,7 @@ EventType = Literal[
     "worker_progress",
     "worker_completed",
     "worker_failed",
+    "sub_progress",
     # Quality
     "quality_gate_result",
     "revise_triggered",
