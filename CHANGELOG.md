@@ -2,6 +2,14 @@
 
 All notable changes to Doramagic are documented in this file.
 
+## [12.3.1] - 2026-03-29
+
+### Fixes
+- `CapabilityRouter.from_openclaw_config()`: Doramagic now reads OpenClaw platform LLM config directly — no need to maintain a separate `models.json`
+- LLM adapter: Anthropic response now joins all text blocks (multi-block responses no longer truncated)
+- LLM adapter: explicit `api_key` field support for models declared via `openclaw.json`
+- Build: `skills/` directory excluded from ruff lint (packaging artifacts, source of truth is `packages/`)
+
 ## [12.3.0] - 2026-03-29
 
 ### Architecture — Knowledge Brick Direct Stitch ("知识积木直缝")
