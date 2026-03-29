@@ -238,9 +238,15 @@ def build_executor_input(
 
 
 def build_capability_router() -> object | None:
-    """初始化 CapabilityRouter。"""
+    """初始化 CapabilityRouter。优先读取 OpenClaw 平台配置，回退到 models.json。"""
     if CapabilityRouter is None:
         return None
+    # 优先读取 OpenClaw 平台的 LLM 配置
+    try:
+        return CapabilityRouter.from_openclaw_config()
+    except Exception:
+        pass
+    # 回退到 Doramagic 自带的 models.json
     try:
         return CapabilityRouter.from_config("models.json")
     except Exception:

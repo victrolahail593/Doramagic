@@ -1,6 +1,6 @@
 [project]
 name = "doramagic"
-version = "12.3.0"
+version = "12.3.1"
 description = "Doramagic - Knowledge extraction and skill forging system"
 requires-python = ">=3.12"
 dependencies = [
@@ -21,6 +21,9 @@ build-backend = "hatchling.build"
 [tool.ruff]
 target-version = "py312"
 line-length = 100
+# skills/ 目录是打包发布产物，源码在 packages/，不需要独立 lint
+exclude = ["skills"]
+force-exclude = true
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "B", "UP", "SIM", "RUF"]

@@ -150,6 +150,7 @@ class LLMAdapter:
         self._base_url: str | None = (
             None  # For OpenAI-compatible APIs (GLM/Qwen/Kimi/DeepSeek/...)  # set by router or config
         )
+        self._api_key: str | None = None  # 显式 API key（优先于 SDK 默认的环境变量）
 
     @property
     def provider(self) -> str:
@@ -299,7 +300,16 @@ class LLMAdapter:
     ) -> LLMResponse:
         import anthropic
 
-        client = self._get_or_create_client("anthropic", lambda: anthropic.AsyncAnthropic())
+        def _make_anthropic_client():
+            kw: dict[str, Any] = {}
+            if self._base_url:
+                kw["base_url"] = self._base_url
+            if self._api_key:
+                kw["api_key"] = self._api_key
+            return anthropic.AsyncAnthropic(**kw)
+
+        client_key = f"anthropic:{self._base_url or 'default'}"
+        client = self._get_or_create_client(client_key, _make_anthropic_client)
         api_messages = [
             {"role": m.role, "content": m.content} for m in messages if m.role != "system"
         ]
@@ -313,8 +323,9 @@ class LLMAdapter:
             temperature=kwargs.get("temperature", 0.0),
             system=system_text or "",
         )
+        text_parts = [b.text for b in resp.content if getattr(b, "type", None) == "text"]
         return LLMResponse(
-            content=resp.content[0].text if resp.content else "",
+            content="\n".join(text_parts) if text_parts else "",
             model_id=model_id,
             finish_reason=resp.stop_reason or "stop",
             prompt_tokens=resp.usage.input_tokens,
@@ -330,7 +341,16 @@ class LLMAdapter:
     ) -> LLMResponse:
         import anthropic
 
-        client = self._get_or_create_client("anthropic", lambda: anthropic.AsyncAnthropic())
+        def _make_anthropic_client():
+            kw: dict[str, Any] = {}
+            if self._base_url:
+                kw["base_url"] = self._base_url
+            if self._api_key:
+                kw["api_key"] = self._api_key
+            return anthropic.AsyncAnthropic(**kw)
+
+        client_key = f"anthropic:{self._base_url or 'default'}"
+        client = self._get_or_create_client(client_key, _make_anthropic_client)
         api_messages = [
             {"role": m.role, "content": m.content} for m in messages if m.role != "system"
         ]
@@ -373,9 +393,11 @@ class LLMAdapter:
         import openai
 
         def _make_openai_client():
-            kw = {}
+            kw: dict[str, Any] = {}
             if self._base_url:
                 kw["base_url"] = self._base_url
+            if self._api_key:
+                kw["api_key"] = self._api_key
             return openai.AsyncOpenAI(**kw)
 
         client_key = f"openai:{self._base_url or 'default'}"
@@ -406,9 +428,11 @@ class LLMAdapter:
         import openai
 
         def _make_openai_client():
-            kw = {}
+            kw: dict[str, Any] = {}
             if self._base_url:
                 kw["base_url"] = self._base_url
+            if self._api_key:
+                kw["api_key"] = self._api_key
             return openai.AsyncOpenAI(**kw)
 
         client_key = f"openai:{self._base_url or 'default'}"

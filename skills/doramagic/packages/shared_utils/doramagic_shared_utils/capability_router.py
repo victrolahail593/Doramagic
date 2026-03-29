@@ -109,6 +109,7 @@ class ModelDeclaration:
     capabilities: list[str]
     cost_tier: str = "medium"  # low, medium, high
     api_key_env: str = ""  # 环境变量名
+    api_key: str = ""  # 解析后的 API key 值（优先于 api_key_env）
     base_url: str = ""  # OpenAI-compatible endpoint (GLM/Qwen/Kimi/DeepSeek/...)
     max_context_tokens: int = 128000
     supports_tool_use: bool = True
@@ -185,23 +186,126 @@ class CapabilityRouter:
             fallback_strategy=data.get("fallback_strategy", "degrade_and_warn"),
         )
 
+    @classmethod
+    def from_openclaw_config(cls, config_path: str | Path | None = None) -> CapabilityRouter:
+        """从 OpenClaw 的 openclaw.json 读取模型配置。
+
+        Doramagic 作为 OpenClaw skill，直接复用平台的 LLM 配置，
+        不需要维护自己的 models.json。
+        """
+        if config_path is None:
+            config_path = Path("~/.openclaw/openclaw.json").expanduser()
+        path = Path(config_path).expanduser().resolve()
+        if not path.exists():
+            raise FileNotFoundError(f"openclaw.json not found: {path}")
+
+        cls._load_openclaw_env(path.parent / ".env")
+
+        data = json.loads(path.read_text(encoding="utf-8"))
+        providers_data = data.get("models", {}).get("providers", {})
+        if not providers_data:
+            raise ValueError("No model providers found in openclaw.json")
+
+        all_caps = [
+            CAPABILITY_DEEP_REASONING,
+            CAPABILITY_STRUCTURED_EXTRACTION,
+            CAPABILITY_TOOL_CALLING,
+            CAPABILITY_CODE_UNDERSTANDING,
+        ]
+        api_type_to_provider = {
+            "anthropic-messages": "anthropic",
+            "openai-completions": "openai",
+        }
+
+        models: list[ModelDeclaration] = []
+        for _provider_name, provider_cfg in providers_data.items():
+            api_type = provider_cfg.get("api", "")
+            doramagic_provider = api_type_to_provider.get(api_type)
+            if not doramagic_provider:
+                continue
+
+            base_url = provider_cfg.get("baseUrl", "")
+            raw_key = provider_cfg.get("apiKey", "")
+            resolved_key = cls._resolve_openclaw_api_key(raw_key)
+            if not resolved_key:
+                continue
+
+            for model_cfg in provider_cfg.get("models", []):
+                model_id = model_cfg.get("id", "")
+                if not model_id:
+                    continue
+                output_cost = model_cfg.get("cost", {}).get("output", 0)
+                if output_cost == 0:
+                    cost_tier = "low"
+                elif output_cost < 5:
+                    cost_tier = "medium"
+                else:
+                    cost_tier = "high"
+
+                models.append(
+                    ModelDeclaration(
+                        model_id=model_id,
+                        provider=doramagic_provider,
+                        capabilities=list(all_caps),
+                        cost_tier=cost_tier,
+                        api_key=resolved_key,
+                        base_url=base_url,
+                        max_context_tokens=model_cfg.get("contextWindow", 128000),
+                        supports_tool_use=True,
+                    )
+                )
+
+        if not models:
+            raise ValueError("No usable models found in openclaw.json (no valid API keys)")
+
+        return cls(
+            models=models,
+            preference="lowest_sufficient",
+            fallback_strategy="degrade_and_warn",
+        )
+
+    @staticmethod
+    def _load_openclaw_env(env_path: Path) -> None:
+        """加载 OpenClaw 的 .env 文件到 os.environ（不覆盖已有值）。"""
+        if not env_path.exists():
+            return
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip()
+            if key and key not in os.environ:
+                os.environ[key] = value
+
+    @staticmethod
+    def _resolve_openclaw_api_key(raw: str) -> str:
+        """解析 OpenClaw 的 apiKey 格式: "${ENV_VAR}" 或字面量。"""
+        if not raw:
+            return ""
+        if raw.startswith("${") and raw.endswith("}"):
+            env_name = raw[2:-1]
+            return os.environ.get(env_name, "")
+        return raw
+
     def for_task(self, task: str):
         """S1-Sonnet 兼容接口：按任务标签返回 adapter。"""
         if self._forced_adapter is not None:
             return self._forced_adapter
-        # 映射 task → capabilities → route → 构建简易 adapter
         caps = _TASK_TO_CAPABILITIES.get(task, [CAPABILITY_STRUCTURED_EXTRACTION])
         self._current_stage = f"task:{task}"
         result = self.route(caps)
-        # 返回一个带 _default_model 的标记对象
         from doramagic_shared_utils.llm_adapter import LLMAdapter
 
         adapter = LLMAdapter(provider_override=result.provider)
         adapter._default_model = result.model_id
-        # Pass base_url for OpenAI-compatible providers (GLM/Qwen/Kimi/DeepSeek/...)
         matched_model = next((m for m in self.models if m.model_id == result.model_id), None)
-        if matched_model and matched_model.base_url:
-            adapter._base_url = matched_model.base_url
+        if matched_model:
+            if matched_model.base_url:
+                adapter._base_url = matched_model.base_url
+            if matched_model.api_key:
+                adapter._api_key = matched_model.api_key
         return adapter
 
     def route(self, required_capabilities: Sequence[str]) -> RoutingResult:
@@ -309,8 +413,11 @@ class CapabilityRouter:
         adapter = LLMAdapter(provider_override=result.provider)
         adapter._default_model = result.model_id
         matched = next((m for m in self.models if m.model_id == result.model_id), None)
-        if matched and matched.base_url:
-            adapter._base_url = matched.base_url
+        if matched:
+            if matched.base_url:
+                adapter._base_url = matched.base_url
+            if matched.api_key:
+                adapter._api_key = matched.api_key
         return adapter
 
     def _select_by_preference(self, candidates: list[ModelDeclaration]) -> ModelDeclaration:
