@@ -1,15 +1,14 @@
 """Phase D executor: synthesize worker envelopes into compile-ready bundles.
 
-v12.1.6: 新增 LLM 质量过滤和熔断机制。
-- LLM 评估每条 decision 与用户 intent 的相关性
-- 过滤 [NO_DATA] 占位符和低质量 decisions
-- 素材不足时触发熔断，返回有意义的降级消息
+v12.2.0: LLM 质量过滤 + 熔断机制。
+v12.3.0: 因果推理 — 保留 "X because Y" 链条，Iron Law 门禁。
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 
 from doramagic_contracts.cross_project import (
@@ -21,6 +20,12 @@ from doramagic_contracts.envelope import ModuleResultEnvelope, RunMetrics, Warni
 from pydantic import BaseModel
 
 logger = logging.getLogger("doramagic.synthesis_runner")
+
+# "because" 子句拆分正则
+_BECAUSE_RE = re.compile(
+    r"^(.+?)\s+(?:because|since|as a result of|due to)\s+(.+)$",
+    re.IGNORECASE,
+)
 
 # 质量过滤提示词
 _QUALITY_FILTER_SYSTEM = (
@@ -81,45 +86,73 @@ class SynthesisRunner:
             if not isinstance(envelope, dict) or envelope.get("status") == "failed":
                 continue
             repo_name = envelope.get("repo_name", f"repo-{index}")
+            repo_url = envelope.get("repo_url", "")
             design_philosophy = envelope.get("design_philosophy") or "[NO_DATA]"
             mental_model = envelope.get("mental_model") or "[NO_DATA]"
             why_items = envelope.get("why_hypotheses", [])[:3] or [design_philosophy]
             trap_items = envelope.get("anti_patterns", [])[:3]
 
+            # --- 注入点 1: 主决策 — 合并 fact + reason 为因果链 ---
+            if mental_model != "[NO_DATA]" and design_philosophy != "[NO_DATA]":
+                causal_statement = f"{design_philosophy} — {mental_model}"
+                causal_rationale = f"{mental_model} (from {repo_name})"
+            else:
+                causal_statement = design_philosophy
+                causal_rationale = mental_model
+
             decisions.append(
                 SynthesisDecision(
                     decision_id=f"why-{index:03d}",
-                    statement=design_philosophy,
+                    statement=causal_statement,
                     decision="include",
-                    rationale=mental_model,
-                    source_refs=[envelope.get("repo_url", "")],
+                    rationale=causal_rationale,
+                    source_refs=[repo_url],
                     demand_fit="high",
                 )
             )
+
+            # --- 注入点 2: why_hypotheses — 解析 "because" 保留因果 ---
             for sub_index, item in enumerate(why_items[:2]):
+                match = _BECAUSE_RE.match(item)
+                if match:
+                    fact, reason = match.group(1).strip(), match.group(2).strip()
+                    why_rationale = f"{reason} (from {repo_name})"
+                else:
+                    fact = item
+                    why_rationale = f"Design pattern from {repo_name}"
                 decisions.append(
                     SynthesisDecision(
                         decision_id=f"why-{index:03d}-{sub_index:02d}",
-                        statement=item,
+                        statement=fact,
                         decision="include",
-                        rationale=f"Derived from {repo_name}",
-                        source_refs=[envelope.get("repo_url", "")],
+                        rationale=why_rationale,
+                        source_refs=[repo_url],
                         demand_fit="medium",
                     )
                 )
+
+            # --- 注入点 3: anti_patterns — 附加风险场景 ---
             for sub_index, trap in enumerate(trap_items[:2]):
                 divergences.append(f"{repo_name}: {trap}")
+                trap_match = _BECAUSE_RE.match(trap)
+                if trap_match:
+                    trap_what = trap_match.group(1).strip()
+                    trap_why = trap_match.group(2).strip()
+                    trap_rationale = f"Risk: {trap_why} (from {repo_name})"
+                else:
+                    trap_what = trap
+                    trap_rationale = f"Anti-pattern from {repo_name}"
                 decisions.append(
                     SynthesisDecision(
                         decision_id=f"trap-{index:03d}-{sub_index:02d}",
-                        statement=f"[TRAP] {trap}",
+                        statement=f"[TRAP] {trap_what}",
                         decision="include",
-                        rationale=f"Observed risk from {repo_name}",
-                        source_refs=[envelope.get("repo_url", "")],
+                        rationale=trap_rationale,
+                        source_refs=[repo_url],
                         demand_fit="high",
                     )
                 )
-            provenance[repo_name] = [envelope.get("repo_url", "")]
+            provenance[repo_name] = [repo_url]
 
         # --- 熔断检查 1: 所有 decisions 都是占位符 ---
         real_decisions = [
@@ -198,13 +231,59 @@ class SynthesisRunner:
                 completion_tokens=completion_tokens,
             )
 
+        # --- Iron Law 门禁: 检查因果链质量 ---
+        _GENERIC_RATIONALE = {
+            "Derived from",
+            "Observed risk from",
+            "Evidence from",
+            "Design pattern from",
+            "Anti-pattern from",
+        }
+        substantive = [
+            d
+            for d in decisions
+            if "[TRAP]" not in d.statement
+            and len(d.rationale) > 30
+            and not any(d.rationale.startswith(g) for g in _GENERIC_RATIONALE)
+        ]
+        iron_law_warning = len(substantive) == 0
+        if iron_law_warning:
+            warnings.append(
+                WarningItem(
+                    code="IRON_LAW",
+                    message="未提取到因果推理链（仅有事实，缺少 WHY）",
+                )
+            )
+
+        # --- compile_brief: 注入真实因果链而非硬编码 ---
+        workflow_lines = []
+        for d in decisions[:5]:
+            if "[TRAP]" in d.statement:
+                continue
+            workflow_lines.append(d.statement[:100])
+            if not any(d.rationale.startswith(g) for g in _GENERIC_RATIONALE):
+                workflow_lines.append(f"  Why: {d.rationale[:120]}")
+        if not workflow_lines:
+            workflow_lines = [f"Start from {input.need_profile.intent}"]
+        if iron_law_warning:
+            workflow_lines.append("[WARNING] No causal reasoning extracted")
+
+        # common_why: 保留 rationale（因果链）而非仅 statement（事实）
+        causal_why = []
+        for d in decisions:
+            if "[TRAP]" in d.statement:
+                continue
+            if not any(d.rationale.startswith(g) for g in _GENERIC_RATIONALE):
+                causal_why.append(f"{d.statement[:80]} — {d.rationale[:80]}")
+            else:
+                causal_why.append(d.statement)
+            if len(causal_why) >= 6:
+                break
+
         compile_brief = {
             "role": [input.need_profile.intent],
             "knowledge": [d.statement for d in decisions if "[TRAP]" not in d.statement][:8],
-            "workflow": [
-                f"Start from {input.need_profile.intent}",
-                "Apply extracted WHY before generic advice",
-            ],
+            "workflow": workflow_lines,
             "anti_patterns": [d.statement for d in decisions if "[TRAP]" in d.statement][:6],
         }
 
@@ -216,7 +295,7 @@ class SynthesisRunner:
             excluded_knowledge=[],
             open_questions=[] if decisions else ["No synthesis decisions generated."],
             global_theses=[d.statement for d in decisions[:5]],
-            common_why=[d.statement for d in decisions if "[TRAP]" not in d.statement][:6],
+            common_why=causal_why,
             divergences=divergences[:6],
             source_provenance_matrix=provenance,
             unknowns=[],
