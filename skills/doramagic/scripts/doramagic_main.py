@@ -61,8 +61,17 @@ def setup_packages_path() -> None:
     env_root = os.environ.get("DORAMAGIC_ROOT")
     if env_root:
         runtime_root = Path(env_root).expanduser().resolve()
-    elif (project_root / "packages").exists() and (project_root / "skills" / "doramagic").exists():
-        runtime_root = project_root  # developer layout takes precedence
+    elif (
+        (project_root / "packages").exists()
+        and (project_root / "skills" / "doramagic").exists()
+        and (
+            (project_root / "pyproject.toml").exists()
+            or (project_root / "Makefile").exists()
+        )
+    ):
+        # 真正的开发者布局：必须有 pyproject.toml 或 Makefile 才算开发目录。
+        # 防止 ~/.openclaw/ 同时含有旧版 packages/ 和 skills/doramagic/ 时被误判。
+        runtime_root = project_root
     elif (skill_root / "packages").exists():
         runtime_root = skill_root  # self-contained skill install
     else:
