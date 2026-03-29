@@ -28,6 +28,8 @@
 - 不要发布时只更新 pyproject.toml 版本号（因为 SKILL.md、README.md、marketplace.json 也有版本号，不同步会导致用户困惑，发现于 2026-03-29）
 - 不要发布后不同步 skills/doramagic/packages/ 副本（因为 skill 运行时用的是副本不是主包，副本落后等于用户装了旧代码，发现于 2026-03-29）
 - 不要让 publish_preflight.sh 和 publish_to_github.sh 的排除列表不同步（因为预检会误报，或发布会遗漏清理，发现于 2026-03-29）
+- 不要忘记发布到 ClawHub（因为 GitHub push 不等于 ClawHub 更新，用户通过 clawhub install 拿到的是 ClawHub 版本，发现于 2026-03-29）
+- 不要用 "doramagic" 搜索 ClawHub（因为 slug 是 "dora" 不是 "doramagic"，搜 doramagic 会返回 0 结果，发现于 2026-03-29）
 
 ## 安全
 
