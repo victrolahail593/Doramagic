@@ -2,6 +2,36 @@
 
 All notable changes to Doramagic are documented in this file.
 
+## [12.2.0] - 2026-03-29
+
+### Infrastructure — Build system fully operational
+- Makefile: `python3` → `.venv/bin/python` (system Python 3.14 had no ruff/mypy)
+- Pre-commit: ruff v0.8.0 → v0.15.8, mypy entry points to .venv
+- `make check` fully passes: lint 0 errors, mypy 0 issues, 544 tests
+
+### Fixed — 1288 lint errors resolved
+- ruff --fix auto-repaired 845 errors; ruff format fixed 290+ line-too-long across 71 files
+- Comprehensive per-file-ignores for pre-existing issues
+
+### Security — P1 fixes
+- LLM prompt injection isolation: 5 points wrapped with `<external_content>` delimiters
+- ReDoS: LLM-controlled regex limited to 200 chars before `re.compile()`
+- LLM call budget: max_llm_calls=50 per session
+- Direct `import anthropic` removed → LLMAdapter only
+
+### Architecture — Code quality
+- flow_controller.py (1028 lines) → 4 modules
+- stage15_agentic.py (1292 lines) → 5 modules
+- orchestration package marked deprecated
+- SynthesisRunner: LLM quality filtering + circuit breaker
+- LLMAdapter: retry with exponential backoff
+
+### Testing — Coverage +80%
+- 302 → 544 tests passing
+- FlowController: 0 → 11 unit tests
+- Restored 3 security test suites (confidence_system, DSD, knowledge_compiler)
+- Fixed 25 test-implementation mismatches
+
 ## [12.1.2] - 2026-03-29
 
 ### Fixed — SKILL.md format alignment with OpenClaw conventions
