@@ -75,6 +75,7 @@ BRICK_CATALOG: dict[str, str] = {
     "domain_pkm": "个人知识管理：Zettelkasten、间隔重复、双向链接、搜索优化",
     "domain_private_cloud": "私有云：Kubernetes、网络、存储、GitOps、灾备",
     "domain_info_ingestion": "信息摄取：爬虫伦理、数据规范化、去重、增量同步",
+    "education_learning": "教育/学习系统：自适应学习、间隔重复、知识图谱、评测反馈、学习路径",
 }
 
 # ---------------------------------------------------------------------------
