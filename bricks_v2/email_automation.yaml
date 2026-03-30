@@ -113,6 +113,74 @@ constraints:
      用户级速率限制（250 quota units/user/s）是硬上限，Google 明确表示 per-user 限制不可提升；
      高频场景只能拆分到多个 Gmail 账号，或改用 Google Workspace 企业账号获取更高配额；
      遇到限流必须指数退避，立即重试会加剧封禁（来源：Gmail API Usage Limits 官方文档）"
+  - "【社区经验】Gmail OAuth refresh token 有 100 个上限（per-user per-client）：
+     同一 OAuth Client ID 对同一用户账号最多生成 100 个有效 refresh token；
+     超出后最旧的 token 自动失效；CI/CD 或频繁重新授权的系统会快速耗尽此限制；
+     解决方案：复用已有 token（写入持久存储）而非每次重新走授权流程
+     （来源：Google OAuth 官方文档 Refresh Token Limits）"
+  - "【社区经验】Gmail API 429 响应的 Retry-After 头不可忽略：
+     Nylas 实测建议保持在 150 quota units/s 以下（官方上限 250）以提供缓冲；
+     收到 429 后应等待 Retry-After 秒数再重试，而非立即重试；
+     多账号场景通过多个 GCP Project 的 Service Account 分散配额
+     （来源：Nylas 技术支持文档，Gmail Quota exceeded error 429）"
+  - "【社区经验】Gmail IMAP imaplib 非 ASCII 邮件主题乱码：
+     邮件主题用 RFC 2047 编码（=?charset?encoding?text?=），imaplib 不自动解码；
+     必须用 email.header.decode_header(subject) + email.header.make_header() 解码；
+     直接 str(subject) 会得到类似 '=?UTF-8?B?5Zug5qCH?=' 的原始编码字符串
+     （来源：Python Discussions，Stack Overflow #7417567）"
+  - "【社区经验】IMAP 邮件搜索含 UTF-8 查询词时 imaplib 报 UnicodeEncodeError：
+     imaplib.search(None, 'SUBJECT', '中文') 会触发 ASCII 编码错误；
+     解决方案：在搜索参数中指定 CHARSET UTF-8，并将查询字符串编码为 bytes：
+     mail.search(b'UTF-8', b'SUBJECT \\xe4\\xb8\\xad\\xe6\\x96\\x87')
+     （来源：Python Bug Tracker issue #65999，imaplib 文档）"
+  - "【社区经验】Gmail IMAP 邮件 UID 与序列号不可混用：
+     imaplib 默认使用序列号（1, 2, 3...）；添加/删除邮件后序列号变化但 UID 不变；
+     生产系统必须用 uid() 命令而非 search()/fetch()，否则操作的是错误的邮件；
+     序列号错位是静默 bug，不报错但删除/读取了错误邮件
+     （来源：imaplib 官方文档，production IMAP best practices）"
+  - "【社区经验】MIME 多部分邮件解析应用 msg.walk() 而非 get_payload()：
+     get_payload() 仅返回顶层内容（非递归）；multipart/mixed 内嵌 multipart/alternative 时
+     get_payload() 返回的是容器而非文本；必须用 msg.walk() 递归遍历所有 MIME 部分；
+     不正确遍历会导致误把 HTML 附件当正文，或完全漏掉纯文本部分
+     （来源：Python email 官方文档，LobsterMail MIME 解析对比）"
+  - "【社区经验】邮件 MIME charset 不一致导致解码失败：
+     同一封邮件可能在 Content-Type 声明 charset=utf-8 但实际使用 gb2312 编码；
+     应捕获 UnicodeDecodeError，fallback 到 chardet.detect() 自动检测编码；
+     不处理此情况会导致中文/日文邮件正文乱码或解析中断
+     （来源：feedparser/email 社区实践，Python email 库常见问题）"
+  - "【社区经验】OAuth 'app not verified' 警告会阻止非测试用户登录：
+     Google OAuth 同意屏幕未通过验证时，非白名单用户（非 Test Users）会看到警告页面并被拦截；
+     生产部署前必须完成 Google OAuth App 验证流程（对 Sensitive Scopes 尤其强制）；
+     测试阶段将用户账号加入 Google Cloud Console 的 Test Users 列表可绕过
+     （来源：Google OAuth 文档，Gmail API Troubleshoot Authentication）"
+  - "【社区经验】Gmail API users.messages.list 仅返回 message ID 不含正文：
+     list 接口返回的每条记录只含 id 和 threadId；
+     必须对每个 id 调用 users.messages.get(format='full') 才能获取正文和附件；
+     每次 get 消耗约 5 quota units，100 封邮件需 500 units（占每日 15000 上限的 3.3%）
+     （来源：Gmail API 官方文档 messages.list）"
+  - "【社区经验】Gmail OAuth credentials.json 类型区分：Desktop App 和 Web App 的 credentials.json 格式不同；
+     Desktop App 的 credentials 在本地运行时会自动弹出浏览器授权；
+     Web App 的 credentials 需要配置 redirect_uri；混用两种类型会导致 'redirect_uri_mismatch' 错误；
+     无头服务器环境应使用 Service Account 或 Desktop App credentials + 预先生成 token
+     （来源：Gmail API Quickstart，Stack Overflow #71873349）"
+  - "【社区经验】Gmail 草稿创建时 MIME 消息必须用 base64.urlsafe_b64encode 而非标准 base64：
+     Gmail API drafts.create 的 message.raw 字段要求 URL-safe base64（+/-替换为-/_）；
+     使用标准 base64.b64encode 会导致 '400 Bad Request: Failed to parse request'；
+     同时需要 decode('utf-8') 转为字符串，不能直接传 bytes 对象
+     （来源：Gmail API 官方文档 drafts.create，Stack Overflow #37201114）"
+  - "【社区经验】imaplib 长连接在 Gmail 服务端 30 分钟不活跃后自动断开：
+     下一条命令会抛 imaplib.IMAP4.abort 或 socket.error；
+     生产 cron 场景中两次轮询间隔超过 30 分钟必须重新建立连接；
+     解决方案：每次操作前重新连接（无状态连接池），或每 25 分钟发 NOOP 保活命令
+     （来源：imaplib 文档，Gmail IMAP connection handling best practices）"
+  - "【社区经验】filter_query 中 after: 参数使用 Unix 时间戳格式（不是日期字符串）：
+     Gmail 搜索语法支持 after:2026/03/29，但程序中生成时常错误拼接为 ISO 8601 格式；
+     after:2026-03-29 这样的格式不被 Gmail 搜索识别，会返回全量邮件；
+     必须用 after:YYYY/MM/DD 斜杠格式（来源：Gmail 搜索运算符官方文档）"
+  - "【社区经验】Gmail API 以 Thread 为单位读取时同一封邮件可能出现多次：
+     users.threads.get 会展开 thread 中所有邮件，对话较长时同一主题邮件重复出现；
+     构建去重逻辑时需以 message.id（而非 threadId）为唯一键
+     （来源：Gmail API threads 文档，Stack Overflow #60271648）"
 
   - |
       【API 资源库】可用的公开 API：
@@ -154,6 +222,26 @@ common_failures:
     mitigation: "所有日志输出中将 token 字符串替换为 '***REDACTED***'；
                  token 对象序列化时实现 __repr__ 隐藏敏感字段
                  （来源：Google OAuth 2.0 Best Practices）"
+  - severity: HIGH
+    pattern: "【社区经验】Gmail IMAP 邮件以序列号而非 UID 操作时，并发读写场景下操作错误邮件：
+              两个并发会话同时操作同一 mailbox，删除/移动邮件导致序列号重排，
+              后续操作命中错误邮件，且不报任何错误"
+    mitigation: "所有 IMAP 操作改用 uid() 命令（mail.uid('SEARCH', ...)），不使用默认序列号；
+                 多进程共用同一 Gmail 账号时实现分布式锁
+                 （来源：imaplib 官方文档 Message Numbers vs UIDs）"
+  - severity: MEDIUM
+    pattern: "【社区经验】邮件解析用 email.message_from_bytes 但未设置 policy，
+              导致邮件头部解码为 'Header' 对象而非字符串，str(msg['Subject']) 包含多余空格和换行"
+    mitigation: "始终设置 policy=email.policy.default：
+                 email.message_from_bytes(raw, policy=email.policy.default)；
+                 此 policy 自动解码 RFC 2047 编码头部为 Unicode 字符串
+                 （来源：Python email 官方文档，copyprogramming.com IMAP 指南）"
+  - severity: LOW
+    pattern: "【社区经验】Gmail API generate_drafts 生成的草稿在 Gmail UI 中出现在 Sent 而非 Drafts 文件夹：
+              原因是创建草稿时 MIME 消息的 To 字段与草稿目标不匹配，Gmail 自动分类错误"
+    mitigation: "草稿创建时确保 MIME 消息的 From 与认证账号一致，To 指向预期收件人；
+                 创建后立即调用 drafts.list 验证草稿确实存在于 Drafts 标签
+                 （来源：Gmail API 社区论坛）"
 
 # === 元数据 ===
 source: manual

@@ -146,6 +146,59 @@ constraints:
      but lacks visual debugging. For complex multi-column tables, use pdfplumber with
      explicit table_settings={'vertical_strategy': 'lines', 'horizontal_strategy': 'lines'}
      rather than relying on text-heuristic strategies which fail on borderless tables."
+  - "Unicode replacement character (U+FFFD) in extracted text: PyMuPDF emits U+FFFD (65533)
+     when it cannot map a glyph to a Unicode codepoint due to a missing or incomplete CMAP
+     in the font. Detect by scanning text for chr(65533); if found, either accept the loss
+     or fall back to OCR for that page. Do NOT silently pass garbled text downstream."
+  - "Ligature characters in extracted text: PDF fonts often encode ligatures as single
+     glyphs (e.g. U+FB00 'ﬀ', U+FB01 'ﬁ'). Before text indexing or NLP, normalise with
+     unicodedata.normalize('NFKC', text) to decompose ligatures into standard ASCII
+     sequences. Failing to normalise causes search misses (searching 'ff' won't match 'ﬀ')."
+  - "LaTeX-generated PDFs with Type3 fonts: PyMuPDF versions >=1.22 may produce garbled or
+     invalid Unicode characters for Type3 font glyphs in LaTeX-generated academic papers.
+     Detect by checking page.get_fonts() for subtype='Type3'; route those pages to OCR
+     fallback or use pdfplumber which handles Type3 differently."
+  - "pdfplumber crop() for header/footer exclusion: production PDFs commonly have running
+     headers, footers, and page numbers that contaminate table extraction. Use
+     page.crop((x0, header_height, x1, page_height - footer_height)) before extract_tables()
+     to isolate the content area. Omitting this step causes header text to be merged into
+     the first table row."
+  - "PyMuPDF segmentation fault on corrupted PDFs: malformed PDF files can trigger a
+     segmentation fault in the underlying MuPDF C library, crashing the entire Python
+     process. Isolate PDF parsing in a subprocess (subprocess.run with timeout) so that
+     a crash does not take down the main application. Never parse untrusted PDFs in-process."
+  - "Watermarks interfere with text extraction: semi-transparent watermarks rendered as
+     text layers (not images) are extracted by PyMuPDF alongside actual content. Use
+     page.get_text('dict') and filter blocks by font size (watermarks are often very large
+     fonts at low opacity) or by color value to remove watermark spans before joining text."
+  - "page.get_text('text') concatenates all text spans with newlines but drops inter-word
+     spacing when words are in adjacent spans. Use page.get_text('words') to get individual
+     word bounding boxes with coordinates, then reconstruct lines with explicit space
+     insertion based on x-gap thresholds."
+  - "PDF with 'empty' text layer over scanned image (dual-layer PDF): some scan-to-PDF
+     tools embed an invisible text layer (OCR output) over the scanned image. PyMuPDF
+     extracts the invisible text layer, which may contain OCR errors from the scan tool.
+     Always validate extracted text quality (character confidence, entropy) rather than
+     assuming the text layer is authoritative."
+  - "pdfplumber extract_text() default x_tolerance/y_tolerance: the default tolerances
+     (x_tolerance=3, y_tolerance=3 pixels) are tuned for well-formatted PDFs. PDFs with
+     variable character spacing (e.g. justified text) require higher x_tolerance (6-10).
+     Tight column layouts require lower tolerance. Calibrate per document type rather than
+     using defaults for all documents."
+  - "PDF page rotation metadata: scanned PDFs are frequently stored with a 90° or 180°
+     rotation flag in the page metadata. PyMuPDF applies rotation transparently when
+     rendering but page.get_text() returns text based on the stored (unrotated) coordinate
+     system. Check page.rotation before OCR; if non-zero, rotate the rendered pixmap back
+     before passing to Tesseract."
+  - "AWS Textract async job polling: for multi-page documents, Textract requires async
+     start_document_text_detection() + polling get_document_text_detection() until
+     JobStatus is SUCCEEDED or FAILED. Never use synchronous detect_document_text() for
+     documents over 1 page — it silently truncates to page 1. Poll with exponential backoff
+     (start 5s, max 30s) and set a total timeout of 10 minutes."
+  - "pdfplumber memory usage on large files: pdfplumber loads the entire PDF into memory
+     via pdfminer. For files >50 MB, memory consumption can exceed 1 GB. Process large PDFs
+     page-by-page using a for page in pdf.pages loop and explicitly call page.flush_cache()
+     after processing each page to release pdfminer's internal cache."
 
   - |
       【API 资源库】可用的公开 API：
@@ -200,6 +253,35 @@ common_failures:
     mitigation: "Detect skew angle with pytesseract.image_to_osd(), rotate using
       PIL.Image.rotate() before OCR; add binarisation step with cv2.THRESH_OTSU
       to separate foreground text from background noise"
+  - severity: HIGH
+    pattern: "PyMuPDF segmentation fault on corrupted PDF crashes entire Python process
+      — production service goes down for a single bad file"
+    mitigation: "Run PDF parsing in an isolated subprocess with a timeout; catch
+      subprocess.TimeoutExpired and subprocess.CalledProcessError; return a structured
+      error with {'error': 'parse_crash', 'file': path} rather than propagating the crash"
+  - severity: HIGH
+    pattern: "U+FFFD replacement characters silently passed downstream to NLP/search
+      pipeline, causing garbled indexing and broken search results"
+    mitigation: "Scan extracted text for chr(65533) after each page; if proportion >5%
+      of total characters, flag page as extraction_quality=LOW and trigger OCR fallback;
+      log the font name from page.get_fonts() to assist debugging"
+  - severity: MEDIUM
+    pattern: "Ligature characters (ﬀ, ﬁ, ﬂ) break keyword search — 'efficient' not
+      found because PDF stores it as 'e﹒ﬁcient'"
+    mitigation: "Apply unicodedata.normalize('NFKC', text) to all extracted text before
+      indexing or returning; this is a one-line fix with no side effects on normal text"
+  - severity: MEDIUM
+    pattern: "Watermark text extracted alongside content — every page contains company
+      watermark repeated in the text output, polluting downstream analysis"
+    mitigation: "Filter page.get_text('dict') blocks by font size thresholds (watermarks
+      typically >72pt) and opacity values; build a watermark pattern detector that checks
+      the first 3 pages and adds identified watermark strings to an exclusion list"
+  - severity: LOW
+    pattern: "PDF page stored rotated 90° — Tesseract receives un-rotated pixmap and
+      produces zero output because text is sideways"
+    mitigation: "Check page.rotation before get_pixmap(); if non-zero, apply
+      mat = fitz.Matrix(1, 1).prerotate(page.rotation) when creating the pixmap so
+      the rendered image is always upright before OCR"
 
 # === 元数据 ===
 source: manual

@@ -132,6 +132,61 @@ constraints:
   - "库存状态来源：PA-API 返回的 Offers.Listings[0].Availability.Type 字段；
      'NOW' 表示有货，'TOMORROW'/'DAYS_1_2' 表示备货中，'WEEKS_1_2' 及以上视为缺货；
      第三方卖家的 include_third_party=true 时合并 Offers 列表取最低价"
+  - "SP-API 2026 年 4 月 30 日起对 GET 请求收费：
+     Amazon SP-API 从 2026-04-30 起按 GET 调用次数收费，POST/PUT/PATCH 免费；
+     频繁轮询价格/库存的系统将产生直接 API 成本；
+     必须改用 Reports API 批量拉取数据替代逐个 GET，一次报告请求可替代数千次 API 调用"
+  - "Amazon 买家选项框（Buy Box）数据被 Amazon 从 Vendor Central 和 SP-API 移除：
+     品牌商无法通过官方 API 获取 Buy Box 赢得率数据，只能依赖第三方爬虫服务；
+     监控第三方卖家违反 MAP 定价时，Amazon 自身也是最大的 MAP 违规方；
+     价格监控系统必须包含对 Amazon 官方定价的监控，不只是第三方卖家"
+  - "SP-API 各端点限速不一致且会不提前通知地变更：
+     Orders API 仅允许 1 请求/分钟（突发 1 次），GetListingOffersBatch 仅 0.1 请求/秒；
+     管理多个卖家账号时每个账号有独立的速率桶，需要 50 个独立的 token bucket；
+     Amazon 会在不通知的情况下修改限速参数，导致原本正常的流水线突然大量 429"
+  - "EAN/UPC 转 ASIN 映射不唯一：同一 EAN 条码可能对应多个 ASIN（不同卖家创建了重复 listing）；
+     PA-API SearchItems 返回的第一个结果不一定是目标商品；
+     必须用商品名称/品牌做二次匹配过滤，不可直接使用 SearchItems 首条结果"
+  - "价格更新延迟最长数小时：
+     PA-API 返回的价格反映的是亚马逊仓储系统的状态，而非实时交易价格；
+     促销活动开始/结束时刻与 API 反映时刻存在最长数小时延迟；
+     高频价格变化场景（闪购、秒杀）必须结合 Keepa 实时通知而非纯轮询"
+  - "camelcamelcamel RSS 价格字段因站点不同格式各异：
+     美国站用 $，英国站用 £，欧洲站用 €，日本站用 ¥，且部分站点价格含逗号千位分隔符；
+     正则仅匹配 $ 符号会导致除美国站外所有站点价格解析返回 None 且无错误"
+  - "第三方卖家价格低但包含隐藏费用：
+     include_third_party=true 时取到的最低价往往是第三方卖家不含运费的价格；
+     实际到手价需要加上 shipping_price；PA-API 在 Offers.Listings[0].DeliveryInfo 字段提供配送信息，
+     必须合并 price + shipping_price 才能做公平比价"
+  - "Keepa 时间戳转换错误导致价格历史图表乱序：
+     Keepa 使用私有时间单位（minutes since 2011-01-08 00:00:00 UTC）；
+     转换公式：datetime.utcfromtimestamp((keepa_time + 21564000) * 60)；
+     用标准 Unix 时间戳直接解读 Keepa 时间会得到 1970 年代的错误日期，
+     不可直接将 keepa_time 传给 datetime.fromtimestamp()"
+  - "价格监控系统漏报库存竞争（inventory race condition）：
+     库存状态为 'NOW' 但下单瞬间因并发抢购而实际缺货；
+     用户收到'有货'通知后立即下单却得到'缺货'，严重影响体验；
+     通知消息必须明确标注'库存状态仅供参考，实际以下单时为准'"
+  - "反爬系统 2025 年升级后静默屏蔽整个 IP 段：
+     Cloudflare 2025 年 7 月起对 AI/自动化爬虫默认屏蔽，
+     机器学习反爬规则调整后可在不返回任何错误的情况下静默屏蔽爬虫请求；
+     必须严格通过 PA-API/RSS/Keepa 等官方渠道获取数据，禁止直接爬取 amazon.com"
+  - "PA-API 每秒 1 次请求限制在批量查询场景下极其不足：
+     每天 8640 次调用上限仅能监控约 360 个 SKU（每 SKU 每 4 小时查询一次）；
+     超出限额后返回 TooManyRequests 错误，且错误率累计到一定程度可导致密钥暂停；
+     批量查询场景必须使用 GetItems 接口一次性查询最多 10 个 ASIN，而非逐个查询"
+  - "汇率缓存在周末/节假日过期后使用过时数据导致价格换算偏差：
+     Frankfurter.app 等免费汇率 API 在非工作日不更新，返回上一个工作日数据；
+     缓存有效期设置为 1 小时在工作日合理，但在周末累计 48+ 小时不更新；
+     价格通知中必须明确显示汇率更新时间，高波动货币对（USD/JPY/GBP）的偏差尤其明显"
+  - "买家选项框（Buy Box）不是最低价：
+     Amazon Buy Box 获得者基于价格、配送速度、卖家评分综合评定；
+     Buy Box 价格可能高于第三方卖家最低价；
+     监控'最低价'和'Buy Box 价格'是两个独立需求，不可混用"
+  - "camelcamelcamel RSS 每小时才更新，价格突变期间最大 60 分钟数据空白：
+     秒杀/限时折扣活动的开始和结束价格变化可能在 RSS 更新窗口内完全错过；
+     RSS 数据源只适合'通知目标价格已到达'的低频场景，不适合精确捕捉价格变动时刻；
+     需要精确时间戳的场景（如计算促销持续时长）必须使用 Keepa 历史数据 API"
 
   - |
       【API 资源库】可用的公开 API：
@@ -183,6 +238,34 @@ common_failures:
               被直接写入历史数据库后拉低所有统计均值，触发错误的降价通知"
     mitigation: "写入历史记录前做异常价格过滤：若新价格 < 历史均价 × 0.3 或 > 历史均价 × 3，
                  则标记为 suspect=true 并单独存储，不影响主价格记录"
+  - severity: HIGH
+    pattern: "SP-API 2026-04-30 起 GET 调用开始收费，轮询型价格监控系统运营成本突增：
+              每天轮询 1000 个 SKU 每小时一次 = 24000 GET 调用/天，
+              按新费率将产生显著月度成本，且没有任何过渡期告警"
+    mitigation: "在迁移截止日期前将轮询架构改为事件驱动（Keepa 通知/RSS）；
+                 仍需 GET 调用的场景改用 Reports API 批量拉取，大幅减少 GET 调用次数"
+  - severity: HIGH
+    pattern: "EAN 转 ASIN 映射错误：同一 EAN 对应多个 ASIN，SearchItems 返回第一个结果，
+              系统追踪了错误的商品，用户收到完全不同商品的价格通知"
+    mitigation: "SearchItems 结果必须通过商品名称/品牌/类目做二次验证；
+                 相似度低于 0.7（模糊匹配）的结果应标记为 needs_manual_review 而非自动采纳"
+  - severity: MEDIUM
+    pattern: "SP-API 限速在多账号场景下超出预期：50 个卖家账号各自的速率桶管理未实现，
+              账号 A 的请求失败被错误地用账号 B 的重试逻辑处理，导致账号 B 也被限速"
+    mitigation: "实现严格的账号级别 token bucket 隔离；不同账号的请求队列物理分离；
+                 429 响应必须携带原始账号 ID 才能路由到正确的重试队列"
+  - severity: LOW
+    pattern: "Keepa 时间戳未正确转换，价格历史显示 1970 年代数据：
+              开发者直接用 datetime.fromtimestamp(keepa_time) 而忽略了 Keepa 的私有时间偏移量"
+    mitigation: "Keepa 时间转换必须用：datetime.utcfromtimestamp((keepa_time + 21564000) * 60)；
+                 在代码中加注释说明公式来源，防止后续开发者'优化'掉偏移量"
+  - severity: HIGH
+    pattern: "PA-API 频率超限积累导致密钥被暂停，所有监控任务静默停止：
+              每秒超过 1 次请求不会立即返回 TooManyRequests；若持续超限，
+              Amazon 会在数小时后暂停密钥，所有查询返回 InvalidSignature 而非频率错误，
+              开发者误以为是认证问题而非频率问题"
+    mitigation: "实现令牌桶（token bucket）严格限速；PA-API 响应中出现 InvalidSignature 时，
+                 先检查请求时钟偏移（AWS SigV4 要求±5分钟内），再检查是否因超限被暂停"
 
 # === 元数据 ===
 source: manual

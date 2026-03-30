@@ -128,6 +128,39 @@ constraints:
   - "【社区经验】AssemblyAI 422/500 错误需重试而非立即失败：
      上传接口（/v2/upload）返回 422 和转录接口（/v2/transcript）返回 500 均为临时错误；
      必须用指数退避重试（推荐 tenacity 库），不可直接标记任务失败（来源：assemblyai.com blog）"
+  - "【社区经验】Whisper hallucination 率约 1%，其中约 40% 含有害内容（种族评论、暴力描述、
+     虚构诊疗内容）：1% 看似很低但规模化后问题严峻；医疗转录商业产品已有真实伤害案例；
+     OpenAI 2023 年底更新模型已修复大多数静音段幻觉，但建议升级到最新版本并仍保留置信度检测
+     （来源：TechCrunch/Fortune 2024-10）"
+  - "【社区经验】Whisper 对失语症等言语障碍患者的幻觉率显著高于普通人群：
+     语言障碍者的停顿/不流利片段更多，是触发幻觉的高危因素；
+     访客障碍辅助/医疗场景必须加倍人工复核，不可依赖自动转录结果（来源：AAAS Science 2024）"
+  - "【社区经验】AssemblyAI 复用 upload_url 被新删除逻辑破坏：
+     删除一条 transcript 会立即使关联的 upload_url 失效，其他使用同一 url 的任务会报错；
+     每条转录任务必须独立上传，不可复用 upload_url（来源：assemblyai.com changelog）"
+  - "【社区经验】AssemblyAI 音频时长过短（<160ms）会直接报 error 状态：
+     检查上传文件是否为有效音频而非空文件或截断文件；
+     提交前用 pydub 或 ffprobe 验证音频时长 >= 1s（来源：assemblyai.com 错误文档）"
+  - "【社区经验】WhisperX 强制对齐对含数字的词汇时间戳偏差高达 3 秒：
+     '2014.' 或 '£13.60' 等含非字母字符的词无法对齐，在 WhisperX 输出中该词无时间戳；
+     对数字密集音频（财务/法律）需单独处理无时间戳词段，不可假设所有词都有时间戳
+     （来源：m-bain/whisperX #1298）"
+  - "【社区经验】WhisperX v3.3.3+ 版本时间戳准确性退步：
+     强制对齐质量低于 v3.3.2，词级时间戳普遍偏松散；
+     生产环境固定到已知稳定版本（如 v3.1.x），并在 requirements.txt 中 pin 版本号
+     （来源：m-bain/whisperX #1220）"
+  - "【社区经验】pyannote 3.0 依赖 onnxruntime 导致部署困难：
+     3.0 版本的 onnxruntime 依赖在多平台存在兼容问题；3.1 版本已移除该依赖；
+     生产部署应使用 pyannote.audio >= 3.1（来源：HuggingFace pyannote/speaker-diarization-3.1）"
+  - "【社区经验】Deepgram diarization + 标点同时启用时跨说话人句子标点混乱：
+     无先做说话人分离再做标点处理时，跨话转换处易出现中句断点或标点丢失，降低准确率至 60-70%；
+     使用 smart_format=True 参数让 Deepgram 同步处理 diarization、标点和 ITN（来源：Deepgram 文档）"
+  - "【社区经验】Deepgram 流式模式断连后需指数退避重连并重放 buffer：
+     断连后不重放缓冲区的未确认音频会导致转录丢段；
+     维护 rolling buffer（建议 5-10 秒），重连成功后先重放 buffer 再继续推流（来源：Deepgram 文档）"
+  - "【社区经验】Deepgram embedding 对口音/方言/年龄差异大的说话人聚类失效：
+     训练数据不覆盖某类音色时，多个说话人被错误合并为一个标签，或同一说话人被拆成多个标签；
+     对 out-of-distribution 音频必须配合人工校正（来源：Deepgram 2025 白皮书）"
 
   - |
       【API 资源库】可用的公开 API：
@@ -173,6 +206,20 @@ common_failures:
       pyannote 的精确 diarization 时间戳与 Whisper 输出时间戳在重叠说话片段存在偏移"
     mitigation: "使用 WhisperX 替代原版 Whisper，其使用 forced alignment 对齐词级时间戳；
       或使用 fuzzy 匹配将 Whisper 段落分配给 pyannote speaker segments（容差 ±0.5s）"
+  - severity: HIGH
+    pattern: "【社区经验】Whisper 幻觉内容含有害信息（种族/暴力）且无任何警告标记，
+      约 40% 的幻觉条目属于有害内容，已在医疗/法律领域造成真实伤害"
+    mitigation: "对高风险场景（医疗/法律/教育）增加内容安全过滤层，将转录文本过滤已知有害模式；
+      输出报告中标注 'auto_transcription: unverified'，强制人工审核工作流（来源：TechCrunch 2024-10）"
+  - severity: MEDIUM
+    pattern: "【社区经验】AssemblyAI 复用 upload_url 后因 transcript 删除导致后续任务失败，
+      错误报文不直接提示 url 失效原因，排查困难"
+    mitigation: "每次转录任务单独上传文件获取新的 upload_url；
+      在任务元数据中记录 transcript_id 和 upload_url 的一对一映射关系，方便追溯（来源：assemblyai changelog）"
+  - severity: MEDIUM
+    pattern: "【社区经验】Deepgram embedding 对相似音色说话人聚类失效，同一说话人被拆为多个 Speaker 标签"
+    mitigation: "提交转录时设置 diarize=True 并指定 min_speakers/max_speakers；
+      后处理阶段可用 agglomerative clustering 合并余弦相似度 > 0.9 的 speaker embedding（来源：Deepgram 文档）"
 
 # === 元数据 ===
 source: manual

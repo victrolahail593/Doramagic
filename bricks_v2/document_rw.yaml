@@ -133,6 +133,71 @@ constraints:
      比计算 end_index 更安全：不需要先读取文档获取最新 index，避免并发写入时的 index 竞争；
      但 endOfSegmentLocation 不支持特定位置插入，仅适用于追加场景
      （来源：Google Docs API 官方 How-To，GitHub Gist tanaikech）"
+  - "【社区经验】Google Docs batchUpdate 的 requests 数组是原子操作，任一请求失败全部回滚：
+     但 index 变化在 requests 数组内是累积计算的，必须按倒序排列多个 insertText 操作；
+     正序插入时前面的 insertText 会让后面操作的 index 失效，导致内容插入到错误位置
+     （来源：Google Docs API structural edit rules 文档，tanaikech GitHub Gist）"
+  - "【社区经验】Google Docs API 文档超过 100 万字符时 get 接口会超时（timeout 60s+）：
+     大文档建议使用 Export API（Drive API v3 files.export）导出为纯文本或 HTML；
+     Docs API 不支持范围读取（只能全量），对大文档应改变读取策略
+     （来源：Google Docs API 已知限制文档）"
+  - "【社区经验】Google Docs API 403 'Insufficient permissions for this file' 可能不是 scope 问题：
+     Service Account 有正确 scope，但目标文档未共享给 Service Account 邮箱时也返回 403；
+     必须在 Google Drive 中将文档显式共享给 service-account@project.iam.gserviceaccount.com；
+     错误诊断：先用 Drive API files.list 确认 Service Account 能看到该文件
+     （来源：opero.com Docs API 403 排查指南）"
+  - "【社区经验】Google Docs WriteControl 字段用于处理并发编辑冲突：
+     batchUpdate 支持 requiredRevisionId 和 targetRevisionId 两种模式；
+     requiredRevisionId：文档版本不匹配时请求失败（适合需要精确控制的场景）；
+     targetRevisionId：尝试合并变更（适合多用户协同）；
+     不设置 WriteControl 时并发编辑会产生不可预期的结果
+     （来源：Google Docs API batchUpdate 官方文档 WriteControl）"
+  - "【社区经验】Notion API Integration 必须被手动添加到目标页面才能访问：
+     即使 token 有效，未被添加到页面的 integration 也会收到 404 object_not_found；
+     自动化脚本常因此报错，且错误信息不区分'页面不存在'和'没有权限'；
+     每次创建新页面后，必须在 Notion UI 中手动 Share > Add connections > 选择 integration
+     （来源：Notion Developer 文档，Zapier Community）"
+  - "【社区经验】Notion API 2025-09-03 版本变更破坏了大量现有 Zapier/n8n 集成：
+     filter.value='database' 改为 filter.value='data_source'；
+     多数据源数据库使用不同的 API 路径；
+     n8n GitHub Issue #19489 记录了大量用户集成失败；
+     自研代码需显式升级 Notion-Version 头，第三方平台需等其更新对应节点
+     （来源：Notion 官方升级指南，n8n GitHub Issue #19489）"
+  - "【社区经验】Notion API append_block_children 每次最多 100 个 block：
+     超过 100 个 block 的内容必须分批次追加；
+     分批追加时每次 append 的 block 数量不超过 100，且批次间遵守 3 req/s 速率限制；
+     一次发送 110+ block 会收到 400 'Fix one: body.children.length should be ≤ 100'
+     （来源：Notion API 文档，Zapier Community #24532）"
+  - "【社区经验】Notion 富文本字段 rich_text[i].text.content 单个元素最多 2000 字符：
+     超过 2000 字符的内容必须拆分为多个 rich_text 元素；
+     直接发送 4000 字符的单段文本会收到 400 'length should be ≤ 2000, instead was 4099'；
+     拆分时需注意不要在 Unicode 多字节字符或 emoji 的字节边界截断
+     （来源：Notion API，Make Community，Zapier Community）"
+  - "【社区经验】Notion API 429 的 Retry-After 是整数秒，但内容有时为浮点数字符串：
+     读取时必须用 int(float(response.headers['Retry-After'])) 而不直接 int()；
+     不遵守 Retry-After 等待更长的封禁窗口；
+     推荐实现请求队列（2-4 并发 + 全局速率限制器）而非直接并发请求
+     （来源：Notion API 官方文档，notion-sdk-py GitHub Issue #262）"
+  - "【社区经验】Google Docs API 读取表格内容需要递归遍历嵌套 StructuralElement：
+     table → tableRow → tableCell → content（再次是 StructuralElement 数组）；
+     仅遍历顶层 body.content 会完全跳过表格内的所有文本；
+     遇到 table 类型的 StructuralElement 需进入其 tableRows 继续递归
+     （来源：Google Docs API 官方文档 Body Content 结构）"
+  - "【社区经验】Notion API 创建 page 和创建 database item 是不同操作：
+     pages.create 的 parent 可以是 page 或 database；
+     parent 为 database 时，需提供 properties 字段（与 database schema 匹配）；
+     parent 为 page 时，properties 只有 title 字段有效；
+     混淆两种场景会收到 400 'properties must not be provided when parent is page'
+     （来源：Notion API 官方文档 pages.create）"
+  - "【社区经验】Google Drive API 权限不继承：子文件夹/文件不自动继承父文件夹的权限变更；
+     将文档移入 Shared Drive 后，文档原有的直接共享权限会被 Shared Drive 权限模型替代；
+     通过 API 修改 Shared Drive 中某文件的权限时会返回 403（Shared Drive 不支持直接权限修改）
+     （来源：Google Drive API permissions 文档）"
+  - "【社区经验】Notion 数据库 properties 类型不可通过 API 修改（只能通过 UI）：
+     API 只能读写已有 property 的值，无法修改 property 的类型（如 text → select）；
+     尝试在 database.update 中改变 property type 会静默忽略 type 字段的变更；
+     schema 变更必须由用户在 Notion UI 中手动完成
+     （来源：Notion API 数据库文档限制章节）"
 
   - |
       【API 资源库】可用的公开 API：
@@ -180,6 +245,27 @@ common_failures:
                  未升级前避免在 Notion 中创建多数据源数据库；
                  自研集成应在请求头 Notion-Version 中明确指定版本号
                  （来源：Zapier Community，Retool Forum）"
+  - severity: HIGH
+    pattern: "【社区经验】Notion API 分页获取 block children 不处理 has_more=true，
+              只获取前 100 个 block，导致长文档内容截断"
+    mitigation: "所有 GET /v1/blocks/{id}/children 调用必须循环处理分页：
+                 while data.get('has_more'): cursor=data['next_cursor']; data=get_children(id, cursor=cursor)
+                 每次 API 调用后合并 results 列表
+                 （来源：Notion API 分页文档，thomasjfrank.com）"
+  - severity: MEDIUM
+    pattern: "【社区经验】Google Docs API 多个 insertText 按正序索引排列，
+              前面的插入操作改变了文档结构，导致后面操作的 index 全部偏移，内容乱序"
+    mitigation: "在一个 batchUpdate 内多个 insertText 请求必须按 index 从大到小倒序排列；
+                 使用 endOfSegmentLocation 追加场景无此问题（顺序不影响）；
+                 或每次 batchUpdate 只包含一个 insertText，操作后重新读取 endIndex
+                 （来源：Google Docs API structural edit rules 文档）"
+  - severity: LOW
+    pattern: "【社区经验】Notion integration token 被误提交到 Git 仓库，
+              导致任何获取代码的人都能读写所有已共享给该 integration 的 Notion 页面"
+    mitigation: "NOTION_API_TOKEN 必须通过环境变量注入，不可硬编码；
+                 发现泄露后立即在 Notion Developer Portal 撤销对应 integration token；
+                 在 .gitignore 中加入 .env 文件
+                 （来源：Notion API 安全最佳实践，Level Up Coding 指南）"
 
 # === 元数据 ===
 source: manual

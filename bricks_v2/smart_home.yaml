@@ -121,6 +121,63 @@ constraints:
   - "状态变化检测：轮询时比较当前 state 和 last_changed 字段与上次缓存值；
      仅 state 变化（如 on→off）或 attributes 中关键字段变化（温度、亮度）才触发通知；
      避免因 last_updated（HA 内部心跳）频繁刷新导致误触发"
+  - "MQTT retained 消息导致 HA 重启后自动化被意外重新触发：
+     当 MQTT 消息 retain=true 时，HA 每次重启或重新订阅主题后都会收到该消息并重新触发自动化；
+     对于'状态变化'类触发器（如门锁打开），retained 消息会导致 HA 重启后重复执行关联动作；
+     自动化中使用 MQTT 触发器时必须在消息处理逻辑中检查 trigger.payload 是否为 retained"
+  - "MQTT 触发器双重触发（double trigger）：
+     使用 json_attributes_topic 和 state_topic 指向同一 MQTT 主题时，
+     加上 force_update: true 会导致 HA 产生两次 state_changed 事件（一次状态更新+一次属性更新）；
+     相关自动化会被触发两次，导致灯光等设备快速开关；
+     应为 state_topic 和 json_attributes_topic 使用不同的子主题（如 /state 和 /attributes）"
+  - "MQTT 通配符订阅（# 或 home/#）引入不可预期的消息：
+     订阅过宽的主题会导致处理到非预期设备的消息，可能触发错误的自动化；
+     同时高频设备（温湿度传感器每分钟上报）的消息量会超过客户端处理能力，积压导致延迟；
+     必须按设备类型分层订阅（如 home/lights/#，home/sensors/#），不可用单一 # 订阅所有消息"
+  - "Z-Wave/Zigbee 设备升级后 entity_id 自动重命名：
+     HA Z-Wave JS 更新后设备的 entity_id 可能从 switch.plug_1 变为 switch.smart_plug_model_x_1，
+     所有硬编码了旧 entity_id 的自动化、脚本、仪表板将静默失效；
+     每次 HA 或 Z-Wave JS/ZHA 集成更新后，必须检查受影响实体并批量更新引用"
+  - "battery-powered 设备无法主动汇报状态需要手动唤醒采访（interview）：
+     Z-Wave 电池设备在 HA 升级后若显示 'Unknown' 状态，不是设备故障而是未完成 interview；
+     必须手动唤醒设备（通常是按一次设备按钮）触发通信，interview 完成后状态才会恢复；
+     大批量设备升级后可能需要逐一手动唤醒，耗时数小时"
+  - "自动化竞争条件（race condition）：
+     自动化被触发但条件检查时设备已切换到下一状态，导致条件与预期不符；
+     典型案例：开关快速开关，自动化在 on 事件触发后检查状态时设备已经是 off；
+     解决方法：在自动化条件中加入 for: 延迟确认（如 for: '0:00:02' 确保状态持续 2 秒）"
+  - "HA 版本升级后 climate 实体的模式值字符串静默变更：
+     HA 2026.1/2026.3 已记录多起 climate 集成模式值重命名（advanced_sleep→sleep，
+     on→performance 等）；字符串值匹配的自动化（如 state='advanced_sleep'）静默失效且无错误日志；
+     升级前必须查看 HA 官方 changelog 中的 Breaking Changes 章节，
+     逐条检查受影响的 integration 和属性值"
+  - "IoT 设备 VLAN 隔离缺失导致横向移动风险：
+     智能家居设备不可与生产办公网络共用同一子网；
+     未隔离的 IoT 设备若被攻击者控制，可作为跳板访问同网段的 NAS、工作站等高价值资产；
+     推荐将所有 IoT 设备划入独立 VLAN（如 192.168.20.0/24），仅允许 HA 服务器跨 VLAN 通信"
+  - "HA Cloud/Nabu Casa 的远程访问在付费订阅失效后所有外部访问立即断开：
+     依赖 HA Cloud 进行远程控制的家庭，订阅过期后手机 App 在外网完全无法访问；
+     关键告警通知（如漏水传感器）也会因此中断；
+     生产级部署必须同时配置本地访问（VPN/Tailscale）作为备份，不可单点依赖云服务"
+  - "HA 自动化 'homeassistant_started' 触发器在监控容器/虚拟机快速重启时可能被漏掉：
+     若 HA 在启动过程中 MQTT broker 尚未就绪，startup 触发器发送的命令会因无法连接而静默丢失；
+     建议改用 availability topic 模式：设备在上线时主动发布 online 状态，
+     HA 订阅此 topic 作为触发器而非依赖 homeassistant_started 事件"
+  - "mDNS 在多子网/VLAN 环境中无法跨网段解析：
+     homeassistant.local 的 mDNS 广播不穿越路由器，VLAN 隔离后客户端无法通过域名发现 HA；
+     生产环境必须为 HA 分配固定 IP 并在 DNS 中添加 A 记录，不可依赖 mDNS 动态发现"
+  - "time_pattern 触发器精度仅为分钟级，秒级自动化需用 script 延迟替代：
+     HA 的 time_pattern 触发器最小粒度为 1 分钟；
+     需要在某一分钟的第 N 秒执行动作时，必须先用 time_pattern 触发，
+     再在 action 中用 delay: '00:00:N' 延迟，不可期望 time_pattern 提供秒级精度"
+  - "input_number/input_boolean 辅助实体在 HA 重启后状态重置为默认值：
+     基于辅助实体状态的自动化在 HA 重启后可能因状态被重置而误触发或失效；
+     对于持久化状态（如'今日是否已执行早晨唤醒'），必须使用 counter 积木或 recorder 数据库，
+     不可依赖辅助实体的运行时状态跨重启持久化"
+  - "Zigbee/Z-Wave 弱信号设备不汇报 unavailable 直接静默失联：
+     信号弱的 Zigbee 设备不会主动报告 unavailable，只是停止更新状态，
+     state 卡在最后一次正常值（如 'on'）；自动化因状态'正常'而继续执行，
+     实际设备已无响应；必须监控 last_changed 时间戳，超过预期间隔标记为 suspected_offline"
 
   - |
       【API 资源库】可用的公开 API：
@@ -171,6 +228,28 @@ common_failures:
               是本地 MQTT broker 的首要性能瓶颈，用户感知明显（如灯光响应迟钝）"
     mitigation: "智能家居核心控制链路必须使用本地 MQTT broker（Mosquitto 部署在局域网内）；
                  云端 MQTT 仅用于远程监控/数据上报，不用于实时控制指令"
+  - severity: HIGH
+    pattern: "MQTT retained 消息在 HA 重启后触发自动化误动作：
+              门锁/安防设备的'已触发'状态 retained 在 broker，HA 重启后重新接收到该消息，
+              导致警报重新响起或门锁重新执行上次动作"
+    mitigation: "安防/门锁等高风险设备的 MQTT 消息不可设置 retain=true；
+                 或在 HA automation 中添加条件检查 trigger.to_state.last_changed 在过去 30 秒内"
+  - severity: HIGH
+    pattern: "Z-Wave 设备固件或 Z-Wave JS 升级后 entity_id 批量变更，
+              数十条自动化规则在更新当晚静默失效，直到用户次日发现设备不响应才察觉"
+    mitigation: "HA/Z-Wave JS 更新前：导出当前自动化配置作为备份；
+                 更新后立即检查 Developer Tools → States 中各设备 entity_id 是否与配置一致；
+                 逐一测试关键自动化（安防、暖通、灯光控制）"
+  - severity: MEDIUM
+    pattern: "state_topic 和 command_topic 混淆：初学者将 command_topic 配置为 state_topic，
+              导致 HA 向设备发送命令时实际上是在订阅一个输出主题，命令不生效且无错误日志"
+    mitigation: "在 MQTT 设备配置 YAML 中加注释说明 state_topic（设备→HA）和 command_topic（HA→设备）方向；
+                 用 MQTT Explorer 或 mosquitto_sub 工具监听主题，实际验证消息流向"
+  - severity: MEDIUM
+    pattern: "IoT 设备与生产网络未隔离：智能插座/摄像头与工作电脑处于同一子网，
+              IoT 设备被攻击后可扫描内网，访问共享文件夹或攻击 NAS"
+    mitigation: "为 IoT 设备划独立 VLAN，防火墙规则限制 IoT VLAN 只能访问互联网和 HA 服务器 IP；
+                 不允许 IoT VLAN 内设备主动访问家庭/办公 VLAN 的任何端口"
 
 # === 元数据 ===
 source: manual

@@ -160,6 +160,38 @@ constraints:
   - "【社区经验】专业术语过度翻译：技术词汇（API/Webhook/SDK）被翻译为中文反而降低可读性；
      建议所有不应翻译的技术词汇在 glossary 中映射为自身（{'API': 'API', 'SDK': 'SDK'}），
      DeepL glossary feature 对常见技术词效果最佳（来源：sawadeetranslations.com）"
+  - "【社区经验】DeepL 免费账号与付费账号 API endpoint 不同，混用导致 403 Forbidden：
+     免费账号必须使用 api-free.deepl.com，付费账号使用 api.deepl.com；
+     deepl-python 库自动处理，但直接 HTTP 调用时必须根据 key 是否以 ':fx' 结尾来选择 endpoint
+     （来源：Drupal auto_translation #3526941）"
+  - "【社区经验】DeepL API 对葡萄牙语 'PT' 代码已废弃，未指定变体时行为不确定：
+     应明确使用 'PT-BR'（巴西）或 'PT-PT'（欧洲）；同样阿拉伯语和繁体中文目前不支持文档翻译，
+     只支持文本翻译（来源：DeepL supported languages 文档）"
+  - "【社区经验】Google Translate API 请求 URL 过长（大量文本放在 GET 参数）被 web server 拒绝：
+     单次翻译文本超过约 2000 字符时应改用 POST 请求而非 GET；
+     google-cloud-translate v3 SDK 默认已使用 POST，旧版 v2 SDK 需注意（来源：Google Translate API 文档）"
+  - "【社区经验】Google Translate 对包含 {name}/%s 等占位符的字符串会修改或重排占位符：
+     大括号内的文字可能被翻译，'%s' 可能被移位；
+     翻译前将占位符替换为独特 UUID 标记（如 %%TOKEN_0%%），翻译后还原（来源：lokalise.com blog）"
+  - "【社区经验】Google Translate 不支持正式/非正式语气选择：
+     荷兰语/德语/法语等的 u/du/vous 等礼貌形式随机输出，同批翻译内语气不一致；
+     若产品需要一致的语气，只能使用 DeepL（支持 formality 参数）或 GPT-4 进行后处理调整
+     （来源：lokalise.com/blog Google Translate pitfalls）"
+  - "【社区经验】LibreTranslate 1.6.3 版本因语言检测 bug 被 yanked，生产环境若使用该版本会静默检测错误：
+     pip install libretranslate 默认拉取最新版本，若拉取到被 yanked 版本则语言检测完全失效；
+     在 requirements.txt 中 pin 到已知稳定版本（来源：LibreTranslate GitHub issue #395）"
+  - "【社区经验】LibreTranslate 自托管添加新语言后，auto-detect 不自动识别新语言：
+     仅翻译功能可用，自动检测缓存没有刷新；需重启服务使语言模型重新加载（来源：LibreTranslate Community 2024）"
+  - "【社区经验】MyMemory 分段翻译时段间拼接处产生多余空格或标点重复：
+     每段翻译结果尾部和下一段开头之间需要智能合并；
+     简单 ''.join(segments) 会丢失段间空格，' '.join() 又会在标点前多加空格；
+     使用正则 re.sub(r'\\s+([。，.!?，！？])', r'\\1', joined_text) 清理多余空格（来源：MyMemory API 文档）"
+  - "【社区经验】DeepL 对阿拉伯语和希伯来语（RTL 语言）翻译质量明显低于欧洲语言：
+     DeepL 主要优化了欧洲语言对，RTL 语言支持是二等公民；
+     RTL 语言场景推荐 fallback 到 Google Translate 或 Azure Translator（来源：eesel.ai/blog/deepl-review）"
+  - "【社区经验】LibreTranslate 公共实例因滥用频繁触发 429，且响应体格式为 {'error': 'Too many requests'}
+     与正常翻译响应格式不同（正常为 {'translatedText': ...}）；
+     必须检测 response.json().get('error') 字段，不可只看 HTTP 状态码（来源：LibreTranslate GitHub issues）"
 
   - |
       【API 资源库】可用的公开 API：
@@ -207,6 +239,26 @@ common_failures:
     mitigation: "调用前检查 target_lang 是否在 deepl 支持列表中；
       不支持时自动 fallback 到 Google Translate（覆盖 130+ 语种）；
       维护 DEEPL_UNSUPPORTED_LANGS 常量集合用于快速判断（来源：eesel.ai/blog/deepl-review）"
+  - severity: HIGH
+    pattern: "【社区经验】DeepL 免费账号使用 api.deepl.com 而非 api-free.deepl.com，返回 403 Forbidden，
+      错误信息不直接提示 endpoint 错误，难以排查"
+    mitigation: "检查 DEEPL_API_KEY 是否以 ':fx' 结尾，是则使用 api-free.deepl.com；
+      deepl-python 库会自动选择 endpoint，直接 HTTP 调用时必须手动判断（来源：DeepL API error docs）"
+  - severity: MEDIUM
+    pattern: "【社区经验】Google Translate 对包含 {name} 或 %s 占位符的本地化字符串翻译后占位符被修改或移位，
+      导致字符串格式化时运行时报错"
+    mitigation: "翻译前用 UUID 占位符替换所有格式化标记（%%PLACEHOLDER_0%% 等），翻译后按 UUID 还原；
+      翻译完成后 assert 占位符数量与原文一致，否则触发重试（来源：lokalise.com blog）"
+  - severity: MEDIUM
+    pattern: "【社区经验】LibreTranslate 公共实例 429 响应体格式为 {'error': '...'} 而非正常 {'translatedText': '...'} ，
+      代码只解析 translatedText 时 KeyError 导致程序崩溃"
+    mitigation: "调用后先检查 response.ok 和 response.json().get('error')；
+      error 存在时记录日志并 fallback 到 MyMemory（来源：LibreTranslate GitHub issues）"
+  - severity: LOW
+    pattern: "【社区经验】Google Translate 在同一批次请求中对同一语言的礼貌语气（正式/非正式）输出不一致，
+      用户界面文案语气混乱"
+    mitigation: "后处理阶段用 LLM 对整批翻译结果进行语气统一校对；
+      或迁移至 DeepL 并设置 formality='prefer_more' 或 'prefer_less'（来源：Google Translate 限制文档）"
 
 # === 元数据 ===
 source: manual

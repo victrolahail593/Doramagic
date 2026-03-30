@@ -172,6 +172,73 @@ constraints:
      visually different chart styles (font sizes, tick spacing, default colors). Pin matplotlib
      version in pyproject.toml/requirements.txt for any pipeline where chart appearance must
      be stable across runs (e.g. compliance reports, version-controlled report archives)."
+  - "DST ambiguous times in pandas groupby aggregations: when grouping time-series data by
+     day/week/month during DST fall-back transitions, pandas may raise AmbiguousTimeError
+     or silently duplicate the ambiguous hour (e.g. 01:30 AM appears twice). Always call
+     df.index.tz_localize(tz, ambiguous='infer') when loading raw data, or store all
+     timestamps in UTC and convert only at display time."
+  - "matplotlib mixed pyplot/OO API causes state leaks: code that alternates between
+     plt.plot() calls and ax.plot() calls in the same function creates hidden state
+     dependencies. Standardise on the OO API (fig, ax = plt.subplots()) throughout;
+     never mix the two APIs in the same module. State leaks are especially dangerous in
+     multi-threaded report generation."
+  - "Seaborn style resets global matplotlib rcParams: calling sns.set_theme() or
+     sns.set_style() globally modifies matplotlib's rcParams for the entire process.
+     In a pipeline that generates multiple chart types with different styles, apply
+     seaborn styles per-figure using with sns.axes_style('whitegrid'): context manager
+     to scope style changes to individual plots."
+  - "NaN values in line charts create invisible gaps: matplotlib line plots silently
+     skip NaN data points, resulting in gaps in the line that look like missing data
+     but are not visually obvious. Either interpolate NaN values with df.fillna(method=
+     'ffill') for continuous metrics, or explicitly mark gaps with a secondary scatter
+     plot of the NaN positions so the reader knows data is missing."
+  - "Plotly figures not displaying in non-interactive environments: pio.show() opens a
+     browser tab and blocks execution in headless server environments. Use
+     fig.write_image(path, engine='kaleido') for static PNG/SVG export in production;
+     install kaleido explicitly (pip install kaleido) as it is not a default Plotly
+     dependency. Missing kaleido raises a generic ValueError at runtime."
+  - "pandas read_csv infers date columns as object dtype by default: date columns are
+     loaded as strings unless explicitly parsed. Always pass parse_dates=['date_col'] and
+     dtype={'metric_col': float} to read_csv. Silent object-dtype dates cause aggregation
+     to sort alphabetically ('2025-10-01' before '2025-09-30') rather than chronologically."
+  - "Google Sheets API quota: free tier allows 300 read requests per minute per project,
+     not per user. A report generator making 5 sheet reads per report and triggered 70 times
+     in a minute will hit the quota. Implement request batching with gspread's
+     spreadsheet.values_batch_get() to read all ranges in a single API call."
+  - "matplotlib subplot spacing with tight_layout: tight_layout() sometimes fails silently
+     when axes have colorbars, inset axes, or legends placed outside the axes boundary.
+     Use constrained_layout=True at figure creation (plt.figure(constrained_layout=True))
+     instead of calling tight_layout() after the fact — it handles complex layouts more
+     robustly."
+  - "Report period boundaries differ by DST switch: a 'weekly' report covering a week that
+     includes a DST transition will have 167 or 169 hours instead of 168. Use
+     pd.date_range(start, periods=7, freq='D', tz=timezone) instead of
+     start + timedelta(days=7) to generate correct period boundaries that respect DST."
+  - "Large dataset plotting performance: matplotlib can freeze the process when rendering
+     scatter plots with >100,000 points. Use datashader or rasterize=True (in hvplot/
+     datashader integration) for large datasets. For standard matplotlib, downsample to
+     max 10,000 points using df.sample(10000, random_state=42) and note the sampling
+     in the chart title or footnote."
+  - "Chart font rendering differs across OS: matplotlib uses system fonts by default, and
+     reports generated on macOS vs. Linux may render with different fonts causing layout
+     differences in PDFs sent to clients. Bundle a specific font (e.g. DejaVu Sans) and
+     set it explicitly with matplotlib.rcParams['font.family'] = 'DejaVu Sans' to ensure
+     consistent cross-platform rendering."
+  - "Base64 chart images balloon email size: embedding a 300 DPI chart as base64 in HTML
+     email produces attachments of 500KB-2MB per chart, triggering Gmail's clipping of
+     emails >102KB. Use dpi=96 for email-embedded charts and dpi=150 for PDF reports.
+     For email, prefer linking to a hosted image URL over base64 embedding."
+  - "Aggregation on empty DataFrame: pandas agg() on an empty DataFrame returns an empty
+     DataFrame without raising an error, causing a silent zero-result report. Always check
+     len(df) > 0 after applying period filters; if the filtered DataFrame is empty, return
+     a structured warning {'error': 'no_data_in_period', 'period': period_label} rather
+     than an empty report."
+  - "Report scheduler timezone drift: if the report scheduler (cron, Celery beat, APScheduler)
+     runs in UTC but the report period is defined in local time, the scheduler trigger time
+     must be converted to UTC. A monthly report scheduled for '1st of month 09:00 Asia/Tokyo'
+     must be scheduled at UTC 00:00 in winter and 23:00 the previous day in summer (JST is
+     UTC+9 year-round, but other timezones shift). Always define schedules in UTC and apply
+     timezone offsets explicitly in the period calculation code."
 
   - |
       【API 资源库】可用的公开 API：
@@ -229,6 +296,39 @@ common_failures:
     pattern: "Blurry chart images in PDF/Word report output because dpi=72 default is too low"
     mitigation: "Always pass dpi=150 (screen) or dpi=300 (print) to savefig(); for base64
       embedding in HTML email, dpi=150 balances quality vs. email attachment size"
+  - severity: HIGH
+    pattern: "Plotly write_image() fails at runtime because kaleido is not installed —
+      no error during development (pio.show() works fine) but crashes in production"
+    mitigation: "Add kaleido to production dependencies explicitly; add a startup check
+      that calls fig.write_image(io.BytesIO()) with a trivial figure at application init
+      to catch missing kaleido before the first real report run"
+  - severity: HIGH
+    pattern: "Aggregation on a period-filtered empty DataFrame returns an empty report
+      with no warning — recipient receives a blank chart with no explanation"
+    mitigation: "After applying date filters, assert len(filtered_df) > 0; if empty,
+      return report_text containing a human-readable 'No data available for [period]'
+      message and set data_row_count=0 in outputs; never send a blank chart"
+  - severity: MEDIUM
+    pattern: "DST transition during report period causes off-by-one-hour boundary error
+      — a weekly report covering a DST change includes 167 or 169 hours of data instead
+      of 168, skewing aggregated metrics"
+    mitigation: "Generate period boundaries with pd.date_range(start, periods=n, freq='D',
+      tz=tz_name) rather than arithmetic timedelta addition; verify boundary correctness
+      in unit tests using a mocked DST-crossing week (e.g. US/Eastern in early November)"
+  - severity: MEDIUM
+    pattern: "Seaborn sns.set_theme() call inside a utility function changes global
+      matplotlib rcParams, causing all subsequent charts in the same process to render
+      in an unexpected style"
+    mitigation: "Wrap seaborn style calls in with sns.axes_style('whitegrid'): context
+      manager instead of global sns.set_theme(); or explicitly restore rcParams with
+      matplotlib.rcdefaults() after chart generation"
+  - severity: LOW
+    pattern: "Chart font renders differently on Linux CI vs. macOS developer machine
+      — client-facing report PDFs have inconsistent typography between environments"
+    mitigation: "Set matplotlib.rcParams['font.family'] = 'DejaVu Sans' at the top of
+      the reporting module; DejaVu Sans is bundled with matplotlib on all platforms;
+      add a CI step that renders a reference chart and compares pixel hash to a stored
+      golden image to catch font regressions"
 
 # === 元数据 ===
 source: manual

@@ -146,6 +146,34 @@ constraints:
   - "【社区经验】Alpha Vantage 非美股历史数据质量差：
      英国/爱尔兰投资信托等非美股历史数据存在明显错误，且再次下载时数据会被改写；
      对非美股建议改用 Polygon.io 或专门的国际数据源（来源：alpha_vantage GitHub #115）"
+  - "【社区经验】Alpha Vantage 免费套餐日限额已从 500 降至 25 次/天（2024 年起）：
+     旧代码按 500/day 设计的调度频率会立刻耗尽额度；
+     使用前用 /query?function=TIME_SERIES_INTRADAY 测试实际限额；
+     批量查询时每次请求间隔不少于 60s/25=2.4 分钟（来源：macroption.com alpha-vantage-api-limits）"
+  - "【社区经验】yfinance 在 PythonAnywhere 等共享 IP 环境遭 Yahoo 封禁频率更高：
+     共享 IP 的大量请求叠加会触发 IP 级限流；
+     建议在独立 VPS 或本地运行，或增加 User-Agent 轮换和随机 sleep(random.uniform(2,8))（来源：PythonAnywhere forums）"
+  - "【社区经验】yfinance 在 2025-02-17 Yahoo 后端变更期间整体失效且返回 'possibly delisted'：
+     Yahoo Finance 修改鉴权机制后，所有 Ticker 数据返回空 DataFrame；
+     务必实现跨 provider 的健康心跳检测（每 15 分钟 ping AAPL），失败时自动切换到备用源（来源：yfinance #2276）"
+  - "【社区经验】CoinGecko /coins/markets 接口支持一次查询最多 250 个币种：
+     以前逐币种调用 /simple/price 的代码在 250+ 币时触发速率限制；
+     改用 /coins/markets?vs_currency=usd&ids=bitcoin,ethereum,...&per_page=250 单次请求（来源：CoinGecko API 文档）"
+  - "【社区经验】CoinGecko 免费层速率限制 2024 年实际约为 10-30 req/min（随流量浮动）：
+     文档上写 30/min 但高峰期实际更低；必须实现指数退避，不可简单 sleep(2) 重试；
+     指数退避起始 1s，最多 64s（来源：CoinGecko docs common-errors-rate-limit）"
+  - "【社区经验】CoinGecko total_volume 和 price_change_24h 基于滚动 24 小时计算，非固定日期：
+     定时获取同一时间的 24h 变化率时，相邻两次调用结果会因滚动窗口轻微差异而不一致；
+     若需计算日间涨跌幅应用 OHLCV 历史接口而非 /simple/price（来源：CoinGecko troubleshooting guide）"
+  - "【社区经验】Polygon.io Starter 套餐 upsert 速率随向量维度升高而显著降低：
+     128 维时可达 300 updates/s，768 维时仅 50 updates/s；
+     批量回填历史数据时必须限速，否则触发 429 并消耗重试配额（来源：Polygon.io 文档）"
+  - "【社区经验】yfinance 返回的 DataFrame 列名随版本变化（如 'Adj Close' vs 'Adj. Close'）：
+     版本升级后按旧列名访问会报 KeyError；
+     访问时用 df.filter(like='Adj').columns[0] 动态获取列名，或在 requirements.txt 中 pin yfinance 版本（来源：yfinance GitHub issues）"
+  - "【社区经验】美股节假日/半日交易日期间 yfinance 返回空 DataFrame 但不报错：
+     仅做 df.empty 检查不够，还需检查返回行的时间戳是否在预期交易日；
+     用 pandas_market_calendars 库获取 NYSE 交易日历进行预验证（来源：slingacademy.com）"
 
   - |
       【API 资源库】可用的公开 API：
@@ -190,6 +218,21 @@ common_failures:
     mitigation: "量化回测必须用 history(auto_adjust=True, repair=True) 参数；
       分红密集股票（REITs/ETF）需与 Tiingo/Quandl 数据交叉验证；
       在 portfolio_summary 输出中标注 'adj_close_accuracy: unverified'（来源：yfinance #2070）"
+  - severity: HIGH
+    pattern: "【社区经验】Alpha Vantage 免费额度从 500/天降至 25/天后，旧代码按高频调度运行，
+      当天额度在几分钟内耗尽，剩余请求全部静默返回 Note 字段"
+    mitigation: "在每次 Alpha Vantage 调用前检查本地计数器，超过 25 次/天则停止调用并记录告警；
+      考虑升级到付费套餐（$50/mo Standard 层无日限额）（来源：macroption.com）"
+  - severity: MEDIUM
+    pattern: "【社区经验】CoinGecko 速率限制在高流量时段动态降低至 10 req/min，
+      固定 sleep(2) 重试策略无法应对，导致任务被持续阻塞"
+    mitigation: "捕获 429 后使用指数退避（起始 2s，最大 64s，最多 5 次）；
+      对于超过 50 个币种的批量查询改用 /coins/markets?per_page=250 单请求（来源：CoinGecko docs）"
+  - severity: LOW
+    pattern: "【社区经验】yfinance DataFrame 列名在 0.2.x 与 0.1.x 间不兼容，
+      升级版本后代码报 KeyError 但无明显错误提示"
+    mitigation: "在 requirements.txt 中 pin yfinance 版本号；升级时用 df.columns.tolist() 日志检查列名变化；
+      用 df.filter(like='Close') 代替硬编码列名访问复权价格（来源：yfinance GitHub）"
 
 # === 元数据 ===
 source: manual

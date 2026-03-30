@@ -131,6 +131,42 @@ constraints:
      不同用户/租户的向量混存于同一 collection 时，
      语义相似的跨租户内容会被错误召回；
      每条向量必须存入 tenant_id metadata，查询时强制过滤（来源：redwerk.com/blog/rag-best-practices）"
+  - "【社区经验】RAG 分块策略对召回率影响大（固定 vs 语义分块）：
+     固定大小分块（400-512 token）在 benchmark 中实现 85-90% 召回率；
+     语义分块（按段落/主题边界切分）可提升 ~9%；但分块过大会引入噪声，过小则丢失语义；
+     推荐默认 chunk_size=512 + overlap=50，然后对结果进行 cross-encoder 重排（来源：arxiv 2401.05856）"
+  - "【社区经验】Pinecone 元数据过滤大 $in 列表严重降低查询性能：
+     filter 中 $in 包含数千个值时，请求 payload 变大且延迟显著增加；
+     推荐改用 namespace 隔离代替大型 $in 过滤，或换用基于 user_id 分组的命名空间设计
+     （来源：Pinecone 文档 database-limits）"
+  - "【社区经验】Pinecone top_k 过大触发 4MB 结果大小限制：
+     查询返回结果超过 4MB 时报错；应降低 top_k 值或在查询时设置 include_metadata=False/include_values=False；
+     结果中不必要的大 metadata blob 是主要元凶（来源：Pinecone docs quotas-and-limits）"
+  - "【社区经验】Weaviate 新旧客户端不兼容导致迁移失败：
+     weaviate-client v4 与 server < 1.27.0 不兼容，不能直接升级客户端；
+     且从 1.27 降回 1.19 会因 schema 格式不兼容导致数据丢失；
+     迁移前必须先升级 server，再升级 client（来源：Weaviate/weaviate GitHub #9626）"
+  - "【社区经验】Weaviate auto-schema 在生产环境下会错误推断数据类型：
+     未定义 schema 时 Weaviate 自动推断，但对混合类型字段推断不稳定，导致部分文档被拒绝或索引错误；
+     生产环境必须显式定义 schema 并禁用 auto_schema（来源：Weaviate docs best-practices）"
+  - "【社区经验】向量数据库磁盘满会导致集群进入只读模式，新增写入静默失败：
+     ChromaDB/Weaviate/Qdrant 在磁盘空间不足时不抛出明显异常，写入被丢弃；
+     必须配置磁盘使用率告警（>80%），并定期清理旧向量和 WAL 文件（来源：Weaviate 故障排查文档）"
+  - "【社区经验】RAG 系统 'blinkered chunk effect'：即使向量检索召回了话题相关的 chunk，
+     该 chunk 内可能不含回答问题所需的关键事实（context 不完整）；
+     缓解：使用 parent-document retriever（检索 chunk 但传入 LLM 的是其所在段落的完整上下文）
+     （来源：snorkel.ai/blog RAG failure modes）"
+  - "【社区经验】embedding 模型版本升级后旧向量与新向量空间不兼容，混合查询结果退化：
+     新旧 embedding 处于不同向量空间，语义相似度比较失效；
+     升级 embedding 模型时必须全量重建索引，不可增量追加新版本向量到旧集合
+     （来源：Weaviate blog when-good-models-go-bad）"
+  - "【社区经验】Obsidian vault 中脚本删除笔记后云同步误删整个 vault：
+     若 vault 目录在同步过程中因脚本批量删除触发大量 delete 事件，同步客户端可能将删除操作同步到所有设备；
+     批量删除操作前必须先暂停云同步，操作后验证结果再恢复同步（来源：Obsidian Forum 2024）"
+  - "【社区经验】obsidiantools Python 包依赖 Obsidian vault 文件结构假设，
+     vault 根目录移动或重命名后所有 wikilink 图谱解析全部失效；
+     vault_path 变更后必须重新初始化 obsidiantools 的 Vault 对象，不可复用旧实例
+     （来源：mfarragher/obsidiantools GitHub）"
 
   - |
       【API 资源库】可用的公开 API：
@@ -176,6 +212,20 @@ common_failures:
       话题相近但内容不匹配的笔记排名高于真正相关的笔记"
     mitigation: "短查询使用 query expansion（调用 LLM 扩展查询词再检索）；
       返回结果加 cross-encoder 重排序（sentence-transformers/cross-encoder/ms-marco-MiniLM-L-6-v2）"
+  - severity: HIGH
+    pattern: "【社区经验】Weaviate 客户端 v4 与旧 server 版本不兼容导致迁移时数据丢失，
+      降级回旧版本会因 schema 格式差异彻底破坏数据"
+    mitigation: "迁移前快照备份整个 Weaviate 数据目录；先原地升级 server 到 1.27+，再升级 client；
+      用 collection alias 功能将应用层与具体集合名解耦，方便回滚（来源：Weaviate migration guide）"
+  - severity: MEDIUM
+    pattern: "【社区经验】Pinecone 查询 top_k 设置过高触发 4MB 响应体限制，导致查询报错"
+    mitigation: "默认 top_k=10；批量检索时逐步降低 top_k 直到不报错；
+      或在查询时设置 include_values=False 减少响应大小（来源：Pinecone docs quotas-and-limits）"
+  - severity: MEDIUM
+    pattern: "【社区经验】embedding 向量未归一化导致余弦相似度计算为负数或异常分布，
+      排序结果与预期完全相反"
+    mitigation: "存入向量数据库前使用 numpy.linalg.norm 归一化：vec / np.linalg.norm(vec)；
+      或在 sentence_transformers 中指定 normalize_embeddings=True（来源：sbert.net docs）"
 
 # === 元数据 ===
 source: manual

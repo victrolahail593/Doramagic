@@ -118,6 +118,58 @@ constraints:
   - "testgen 模式下生成的测试断言必须基于代码的实际返回类型，
      不可生成 assertEqual(result, None) 这类无意义断言；
      每个测试用例必须覆盖至少一个业务路径（正常路径/边界值/错误路径三选一）"
+  - "AI 代码审查无法跟踪跨文件/跨模块数据流：ESLint 等工具仅在文件级别评估代码，
+     无法感知不受信任的输入如何在服务间传播，也无法识别条件分支是否在运行时实际执行；
+     对所有用户输入的 sanitize 链路验证必须通过集成测试而非仅靠静态分析"
+  - "slopsquatting（幻觉包名）是 2025 年新兴供应链高危攻击：
+     研究表明约 20% 的 AI 代码建议中存在不存在的包名（开源模型约 21.7%，商业模型约 5.2%）；
+     攻击者先观测 LLM 的高频幻觉包名，再在 PyPI/npm 上注册同名恶意包；
+     43% 的幻觉包名在重复触发同一 prompt 时会持续出现，具有可预测性；
+     所有 AI 建议的 pip/npm 安装必须先在官方注册表验证包名存在且下载量正常"
+  - "AI 辅助开发增加 PR 体量但降低审查深度：
+     PR 新增行数平均增加 18%，但审查者无法同步提高审查速度，
+     预估 2026 年产生约 40% 质量赤字（进入代码库的代码超过有效审查能力）；
+     必须为 AI 辅助 PR 设置硬性行数上限（建议 ≤400 行变更），超限自动要求拆分"
+  - "AI 生成代码的逻辑错误比人工代码高 75%：
+     Coderabbit 2025 报告显示 AI PR 的 critical/major 问题数是人工 PR 的 1.4-1.7 倍，
+     主要表现为控制流错误、错误的依赖关系、业务逻辑误解；
+     这类错误外观上看起来合理，只有走读整个执行路径才能发现，不能靠 lint 自动发现"
+  - "ESLint 禁止在 AI 生成代码中使用 eslint-disable 内联注释：
+     AI 倾向于通过添加 eslint-disable 注释来'通过'lint，而非修复实际问题；
+     CI 配置中应加入 --report-unused-disable-directives 并将其视为错误"
+  - "AI 代码在 Docker/干净环境中的行为与本地开发环境不同：
+     AI 生成的代码可能在开发机上运行正常，但在 Docker 容器或 CI 环境中因隐式依赖、路径假设、
+     环境变量缺失而失败；每个 AI 生成的功能必须在隔离环境中跑一次冒烟测试"
+  - "测试覆盖率指标不等于测试质量：
+     AI 生成的测试倾向于用大量相似断言刷高覆盖率，但忽略边界值、
+     并发场景和真实的业务错误路径；coverage ≥80% 是必要条件而非充分条件，
+     必须人工审查测试用例是否覆盖了真实的失败场景"
+  - "AI 代码审查工具的安全漏洞检测率有限：
+     Veracode 2025 报告显示 AI 生成代码中安全缺陷出现率比人工代码高 1.5-2 倍，
+     包括密码处理不当、不安全对象引用等；
+     AI 代码审查不可作为安全审计的替代，必须配合专项安全扫描（SAST/SCA）"
+  - "AI 修复测试失败的默认行为是修改断言而非修复代码：
+     当 CI 中测试失败时，AI 的'最省力路径'是调整断言使测试通过而非理解业务逻辑；
+     接受 AI 的测试修复输出前必须确认：失败原因是代码逻辑问题还是断言需要更新"
+  - "上下文缺失导致 AI 代码审查幻觉率上升：
+     65% 的开发者在重构场景中报告 AI 因缺乏全局上下文而产生错误建议；
+     提供给 AI 审查工具的上下文应包含：相关接口定义、调用方代码、业务规则文档，
+     而非只传入被审查的单个文件"
+  - "AI 生成代码中的并发 bug（race condition、死锁）难以被 lint 检测：
+     AI 在多线程/异步代码中可能引入 mutex 使用错误、共享状态未加锁、
+     await 位置不当等并发 bug，这类 bug 在单线程测试中不复现；
+     并发关键路径（如数据库事务、队列消费）必须专项代码审查，不可依赖 AI 自动检测"
+  - "lint 规则跨语言混用导致静默漏报：
+     Python 的 type: ignore 对 ESLint 无效；TypeScript 的 @ts-ignore 对 mypy 无效；
+     多语言 monorepo 中必须为每种语言配置独立的 lint pipeline，
+     不可将不同语言的代码混入同一个 lint 命令"
+  - "AI 辅助 PR 的变更失败率（change failure rate）上升约 30%：
+     CodeRabbit 2025 报告显示 AI 辅助 PR 的生产事故率比纯人工 PR 高 24-30%；
+     必须对所有 AI 辅助 PR 标注来源，在事后分析（post-mortem）中追踪 AI 辅助 PR 的故障占比；
+     若 AI 辅助 PR 故障率持续高于基线，应提高 AI 代码的 review 严格程度"
+  - "tree-sitter 解析器在注释包含代码片段时产生 AST 节点歧义：
+     某些编程语言中注释内的代码样例可能被 tree-sitter 误识别为实际代码节点；
+     分析 AST 时必须先过滤 comment 类型节点，不对注释内的标识符做引用分析"
 
   - |
       【API 资源库】可用的公开 API：
@@ -156,8 +208,37 @@ common_failures:
   - severity: MEDIUM
     pattern: "Linter 规则集与项目实际约定不匹配：SonarQube 等工具的默认规则在团队自定义约定下产生大量误报，
               开发者逐渐开始忽略所有告警（狼来了效应）"
-    mitigation: "Linter 上线时先在只读模式（warn-only）运行 2 周，统计高频误报规则后针对性排除；
+    mitigation: "Linter 上线时先在只读模式（warn-only）运行 2 weeks，统计高频误报规则后针对性排除；
                  维护 .sonarcloud.properties / .eslintignore 记录已知误报原因，而非全量 disable"
+  - severity: HIGH
+    pattern: "AI 生成测试断言验证的是 AI 自己的假设而非开发者意图：
+              AI 在测试中倾向于断言其自身预期的输出，当业务逻辑本身就是错误的时，
+              测试和逻辑同步错误，CI 仍然通过，但功能完全不符合需求"
+    mitigation: "关键业务逻辑的测试断言必须由人工编写（或至少人工核验）；
+                 在 code review checklist 中专门加入一条：'断言值来自业务规范还是 AI 推测？'"
+  - severity: HIGH
+    pattern: "AI 建议安装的 npm/PyPI 包为幻觉包名（slopsquatting）：
+              20% 的 AI 代码建议引用了不存在的包，攻击者可注册同名恶意包；
+              43% 的幻觉包名在重复触发同一 prompt 时稳定复现，可被预测利用"
+    mitigation: "所有 AI 推荐的依赖安装前，必须在 PyPI/npm 官网核查包名存在且下载量合理（>1000/月）；
+                 在 CI 中添加 pip-audit / npm audit 步骤扫描已安装包的完整性"
+  - severity: MEDIUM
+    pattern: "AI 代码修复在 Docker/CI 环境中重现同一错误：
+              AI 生成的代码修复可能隐式依赖本地开发环境特有的配置、路径或环境变量，
+              在 Docker 容器中运行时原始错误重新出现"
+    mitigation: "每次接受 AI 的重大代码修复后，立即在 docker run 隔离环境下跑冒烟测试；
+                 不可只依赖本地 IDE 运行测试通过作为验收标准"
+  - severity: LOW
+    pattern: "AI 代码审查工具的 PR 评论产生审查疲劳：大量 trivial 建议（命名、格式、注释风格）
+              淹没了真正重要的逻辑和安全问题，审查者开始批量忽略 AI 评论"
+    mitigation: "配置 AI 审查工具仅输出 HIGH/CRITICAL 级别问题；
+                 将 formatting/style 类反馈交由 pre-commit hooks 自动处理，不进入审查流程"
+  - severity: HIGH
+    pattern: "AI 为异步函数生成同步测试，测试永远通过但实际未执行业务逻辑：
+              async def get_user() 被生成为 result = get_user()，此时 result 是 coroutine 对象；
+              assert result is not None 永远为 True，测试绿色但业务逻辑从未被验证"
+    mitigation: "检测函数定义中的 async def 关键字，自动生成 @pytest.mark.asyncio 装饰器；
+                 测试生成后运行 mypy 静态检查，coroutine 对象赋值给非 Awaitable 变量时会报错"
 
 # === 元数据 ===
 source: manual

@@ -156,6 +156,73 @@ constraints:
      become stale (outdated pricing, deprecated product names, broken links). Implement a
      template TTL: flag templates not reviewed in 90 days as 'stale' and require human review
      before they continue sending."
+  - "Hard bounce suppression is mandatory: any address that returns a hard bounce (SMTP 5xx
+     permanent failure) must be immediately added to a suppression list and never messaged
+     again until the address is re-confirmed. Continuing to send to hard-bounced addresses
+     degrades sender domain reputation and triggers ISP blacklisting. Maintain the suppression
+     list across all sending systems — ESPs and internal mailers must share the same list."
+  - "Soft bounce monitoring and graduated suppression: soft bounces (SMTP 4xx temporary
+     failure) that recur for the same address over 3+ consecutive sends indicate a stale or
+     abandoned mailbox. After 3 consecutive soft bounces, suppress the address and log the
+     suppression reason. Do not treat soft bounces as harmless; accumulated soft bounce
+     rates above 2% trigger deliverability degradation."
+  - "IP warming is required for new sending IPs: sending bulk email from a brand-new IP
+     without warming triggers immediate spam classification by major providers. Start with
+     50-100 emails/day, double every 48 hours over 4-6 weeks. Use only the highest-quality,
+     most engaged segment during warmup. Skipping this step on a new IP commonly results
+     in near-zero inbox placement for 30+ days."
+  - "CAN-SPAM unsubscribe processing deadline: CAN-SPAM allows up to 10 business days to
+     process opt-out requests, but best practice is same-day processing. Queuing unsubscribes
+     for batch processing and failing to suppress within the same send run creates a window
+     where the unsubscribed address receives additional emails, which drives spam complaints."
+  - "List segmentation prevents over-sending: sending the same message to your entire list
+     is both a deliverability risk and a GDPR risk. Segment by engagement recency (active
+     <30 days, dormant 30-90 days, lapsed >90 days) and reduce send frequency for dormant
+     segments. Re-engagement campaigns before permanent suppression are required for GDPR
+     data retention compliance."
+  - "Tracking pixel consent under GDPR/ePrivacy: email open-tracking pixels are cookies
+     equivalent under the ePrivacy Directive. Recipients must explicitly opt in to tracking
+     for EU-based recipients. Sending tracked emails to EU recipients without tracking consent
+     is a separate GDPR violation from marketing consent. Disable tracking pixels for
+     recipients without explicit tracking consent."
+  - "Purchased or scraped email lists: purchasing or scraping email lists violates GDPR,
+     CAN-SPAM, and CASL simultaneously. Addresses on such lists have not consented to contact
+     from your organisation; the bounce rate is typically >20% and complaint rate >0.5%,
+     which triggers immediate domain blacklisting by major providers. Never import external
+     lists without per-address consent documentation."
+  - "Spam trigger words in automated subject lines: automated templates using common urgency
+     phrases ('Act now', 'Free', 'Limited time', '100%', 'Guaranteed') trigger Bayesian spam
+     filters even with perfect authentication. LLM-generated subject lines must be scanned
+     against a spam word list (SpamAssassin ruleset) before sending; reject subject lines
+     that score >2.0 on the SpamAssassin scale."
+  - "Email content image-to-text ratio: automated emails with >40% image content and minimal
+     text trigger spam filters at Gmail and Outlook because spammers use images to hide text
+     content. Maintain at least 60% text content. Purely image-based promotional emails
+     without alt text fail both spam filters and accessibility requirements simultaneously."
+  - "Double opt-in reduces complaint rates by 70%: single opt-in lists accumulate typo
+     addresses and spam traps. Implement confirmed (double) opt-in where the subscriber
+     clicks a confirmation link before being added to the active list. Store the confirmation
+     timestamp, IP address, and confirmation link URL as part of the consent record."
+  - "Transactional vs. marketing classification: transactional emails (order confirmations,
+     password resets, receipts) do not require marketing consent under CAN-SPAM or GDPR, but
+     adding promotional content to a transactional email reclassifies it as marketing and
+     makes the unsubscribe/consent requirements apply. Never embed upsell offers in purely
+     transactional email templates without explicit consent validation."
+  - "Reply-to address for automated emails: automated emails sent from no-reply@domain.com
+     suppress customer responses and create a poor experience. Set a monitored reply-to
+     address that routes replies to a support queue. Customers who reply to automated emails
+     are actively engaged — ignoring their replies generates churn and negative reviews."
+  - "Character encoding in multilingual templates: Jinja2 renders UTF-8 by default, but
+     some SMTP relays or legacy ESP systems transcode to Latin-1, corrupting Arabic, CJK,
+     and emoji characters. Always specify Content-Type: text/html; charset=UTF-8 in email
+     headers; validate rendered output for non-ASCII character preservation before sending
+     multilingual batches."
+  - "Plain-text fallback required for deliverability: HTML-only emails without a
+     corresponding plain-text MIME part are flagged as suspicious by spam filters and
+     cannot be read by accessibility tools or email clients that prefer plain text.
+     Always generate a multipart/alternative email with both text/plain and text/html parts.
+     Strip HTML tags from the body to generate the plain-text version; do NOT send an
+     empty plain-text part."
 
   - |
       【API 资源库】可用的公开 API：
@@ -215,6 +282,43 @@ common_failures:
       broken URL, causing customer confusion and support overhead"
     mitigation: "Attach created_at and last_reviewed_at fields to each template; automatically
       pause templates where last_reviewed_at > 90 days ago and alert the responsible owner"
+  - severity: HIGH
+    pattern: "Continuing to send to hard-bounced addresses degrades domain reputation
+      permanently — ISP blacklisting takes weeks to recover from"
+    mitigation: "Subscribe to bounce notification webhooks from your ESP; write a webhook
+      handler that inserts hard-bounce addresses into the suppression table within seconds;
+      run a nightly dedup job to ensure suppression table is consistent across all senders"
+  - severity: HIGH
+    pattern: "Tracking pixels sent to EU recipients without explicit tracking consent
+      — separate GDPR violation on top of any marketing consent issues"
+    mitigation: "Maintain a separate tracking_consent boolean flag per recipient alongside
+      marketing_consent; conditionally include or omit the tracking pixel at template render
+      time based on this flag; default to no-tracking for all recipients without explicit
+      tracking consent records"
+  - severity: HIGH
+    pattern: "New sending IP deployed without warmup — near-zero inbox placement for
+      30+ days after launch, blocking all customer communication"
+    mitigation: "Build a warmup schedule into the deployment plan: 50 emails day 1, doubling
+      every 2 days using only highly-engaged (opened in last 30 days) segment; monitor
+      Postmaster Tools (Gmail) and SNDS (Microsoft) dashboards daily during warmup phase"
+  - severity: MEDIUM
+    pattern: "HTML-only email without plain-text fallback gets spam-filtered and fails
+      accessibility for screen-reader users"
+    mitigation: "Always build multipart/alternative emails; auto-generate plain-text part
+      from HTML by stripping tags with html2text or BeautifulSoup; never send an empty
+      plain-text part as that is worse than omitting it"
+  - severity: MEDIUM
+    pattern: "Spam trigger words in LLM-generated subject lines cause emails to land in
+      junk folder despite valid authentication"
+    mitigation: "Integrate SpamAssassin (spamassassin-python or a hosted API) into the
+      pre-send pipeline; reject templates that score > 2.0; add the failed subject line
+      and score to the review queue for human rewrite"
+  - severity: LOW
+    pattern: "Purchased email list with high bounce rate (>20%) triggers immediate
+      domain reputation penalty, blocking legitimate transactional emails too"
+    mitigation: "Never import external lists; if a legacy list must be used, run every
+      address through an email validation API (Mailboxlayer, Abstract, NeverBounce) to
+      remove syntactically invalid and non-existent addresses before the first send"
 
 # === 元数据 ===
 source: manual

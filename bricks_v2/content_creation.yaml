@@ -116,6 +116,70 @@ constraints:
      遗漏此头时部分端点仍能工作（向后兼容），但 ugcPosts 等新端点会返回 400/406；
      旧教程（2021年前）引用的 v1 scope（如 r_basicprofile）已废弃，
      使用旧 scope 申请 token 会 silently 降级到有限权限（来源：LinkedIn Developer FAQ，Marcus Noble）"
+  - "【社区经验】LinkedIn OAuth redirect_uri 必须与 Developer Portal 完全匹配（含尾部斜杠）：
+     redirect_uri='https://example.com/callback' 与 'https://example.com/callback/'（含斜杠）
+     被视为不同 URI，会触发 'redirect_uri_mismatch' 错误；
+     多环境（dev/staging/prod）需在 Developer Portal 分别注册各环境的 redirect_uri
+     （来源：LinkedIn OAuth 2.0 官方文档，Medium @ed.sav 2025 notes）"
+  - "【社区经验】LinkedIn ugcPosts API 的 422 含 emoji 字符计数问题：
+     emoji 在 LinkedIn API 中计 2 个字符（UTF-16 编码）；带肤色修饰符的 emoji 可计 4+ 个字符；
+     len(text) 返回 Unicode 字符数，不等于 LinkedIn 计算的字符数；
+     安全做法：将内容截断到 2800 字符（留 200 字符 buffer）再提交
+     （来源：LinkedIn API 错误处理文档，Ordinal 字符限制指南）"
+  - "【社区经验】LinkedIn API w_member_social scope 需要通过 LinkedIn 审核才能在生产使用：
+     使用 LinkedIn 默认开发应用（未审核）时，w_member_social 仅允许帖子发到测试账号；
+     发布到真实受众需申请 'Share on LinkedIn' 产品权限；
+     许多开发者在测试环境成功后上生产环境时发现权限不足，导致 403
+     （来源：LinkedIn Developer FAQ，trykondo.com 权限指南）"
+  - "【社区经验】Twitter/X Free tier 在 2025 年 API 变更后写操作（发推）需要 Basic tier（$100/月）：
+     Free tier 目前不支持写操作（POST /2/tweets），只支持读操作；
+     尝试在 Free tier 发推会返回 403 'Forbidden'，与权限不足错误相同；
+     自动化发推项目上线前必须升级到 Basic tier 或 Pro tier
+     （来源：X API 官方定价页面 2025）"
+  - "【社区经验】tweepy 的 wait_on_rate_limit=True 只处理 15 分钟窗口 429，不处理月度上限 429：
+     月度用量耗尽返回的 429 没有 x-rate-limit-reset 头（或值为月末），
+     tweepy 会无限等待到月底，阻塞整个进程；
+     应捕获 tweepy.TooManyRequests，检查 error response body 中是否含 'monthly cap' 字样，
+     是则标记为月度耗尽状态，不再重试
+     （来源：tweepy GitHub PR #2231，X Developer Community 讨论）"
+  - "【社区经验】Twitter Thread 发布时每条推文是独立 API 请求，中途失败导致 Thread 不完整：
+     Thread 没有原子性保证；第 3 条发送失败时，前 2 条已经发布无法回滚；
+     应在发布前将整个 Thread 内容生成完毕并验证，减少中途中断的概率；
+     记录已发布推文 ID，支持'从断点继续发布'的恢复逻辑
+     （来源：tweepy 文档，Twitter API Thread 最佳实践）"
+  - "【社区经验】Twitter 媒体上传 v1.1 endpoint 在 2025-03-31 对 Free/Basic/Pro tier 停用：
+     POST https://upload.twitter.com/1.1/media/upload.json 返回 404 或 403；
+     必须迁移到 v2 媒体上传（需 Early Access 申请）或改用第三方发布工具（Buffer/Ayrshare）；
+     旧代码依赖 tweepy.API.media_upload() 的 v1.1 路径会失败
+     （来源：X Developer Platform 通知，Make Community 2025 讨论）"
+  - "【社区经验】Buffer API 定时发布时 scheduled_at 必须用 Unix timestamp 而非 ISO 格式：
+     Buffer API 的 scheduled_at 参数接受 Unix 时间戳（秒），不接受字符串日期；
+     传 ISO 8601 字符串会被静默忽略，内容立即发布而非定时发布；
+     用 int(datetime.fromisoformat(schedule_time).timestamp()) 转换
+     （来源：Buffer API 官方文档 updates/create）"
+  - "【社区经验】LinkedIn API 版本头 X-LinkedIn-Version 需要指定 YYYYMM 格式：
+     某些端点的版本头过期（超过 12 个月）后会返回 'version deprecated' 错误；
+     每次 LinkedIn API 更新后需更新版本头；
+     最新版本在 LinkedIn 开发者新闻通讯中公布，需定期关注
+     （来源：LinkedIn API Error Handling 文档，Pipedream GitHub issue #854）"
+  - "【社区经验】Markdown 中的 Unicode 粗体字符（𝗕𝗼𝗹𝗱）在 LinkedIn 上表现为粗体视觉效果：
+     但在 LinkedIn 内部搜索中不可检索（搜索不到 Unicode 特殊字符）；
+     且部分设备/屏幕阅读器渲染异常；建议仅在主文字内容末尾少量使用，不可滥用
+     （来源：LinkedIn Content Creator 指南，contentide.com）"
+  - "【社区经验】发布图片 URL 到 Twitter 时不能直接传 URL，必须先下载再以二进制上传：
+     tweepy.Client 的 create_tweet 不支持直接使用图片 URL；
+     media_upload 接口也不支持 URL（只支持二进制数据）；
+     流程：requests.get(image_url) → bytes → media.upload(binary) → 获取 media_id → 附加到推文
+     （来源：Twitter API 媒体上传文档，tweepy 示例代码）"
+  - "【社区经验】LinkedIn API Client Secret 在某些情况下可能超过官方声称的 32 字符限制：
+     n8n 社区报告了 33 字符 Client Secret 导致集成配置失败的案例；
+     验证 Client Secret 时不应做长度校验，直接使用 LinkedIn Developer Portal 提供的原始值
+     （来源：n8n Community LinkedIn API Client Secret 86953）"
+  - "【社区经验】内容定时发布调度脚本若无心跳监控，静默停止后内容计划完全中断：
+     定时任务进程崩溃不会自动重启，且不会发任何告警；
+     必须配置进程级心跳监控（每次发布后写入 last_run 时间戳），
+     并设置'超过预期间隔未发布'的零产出告警
+     （来源：全局工程规范 §6.6 零产出告警）"
 
   - |
       【API 资源库】可用的公开 API：
@@ -163,6 +227,25 @@ common_failures:
                  v2 写操作（发推）必须用 OAuth 1.0a User Context，不能用纯 Bearer Token；
                  使用 tweepy.Client 而非手动拼 URL 可减少迁移出错概率
                  （来源：X API v2 官方文档）"
+  - severity: HIGH
+    pattern: "【社区经验】tweepy wait_on_rate_limit=True 在月度配额耗尽时无限阻塞进程，
+              导致整个自动化管道挂起数周"
+    mitigation: "不使用 wait_on_rate_limit=True；改为手动捕获 tweepy.TooManyRequests；
+                 检查 response body 中 'monthly cap' 标志，区分窗口限流和月度耗尽；
+                 月度耗尽时立即停止并发出告警，不继续等待
+                 （来源：tweepy GitHub PR #2231）"
+  - severity: MEDIUM
+    pattern: "【社区经验】LinkedIn 60 天 token 过期后，服务端脚本没有续期逻辑，
+              第 61 天起所有发布失败，且 LinkedIn 不支持 3-legged OAuth refresh token 静默续期"
+    mitigation: "token 创建时存入 created_at；每次调用前检查 >= 50 天时推送 Telegram/邮件告警；
+                 代码中捕获 401 后同时检查 token 年龄，> 60 天时给出明确提示'请重新授权 LinkedIn'
+                 （来源：LinkedIn OAuth 2.0 官方文档，Medium @ed.sav）"
+  - severity: LOW
+    pattern: "【社区经验】社交媒体自动化脚本提前数周批量调度内容，世界突发事件期间发出不合时宜的帖子，
+              造成品牌形象损害"
+    mitigation: "定时发布前 1 小时设置 human review 检查点；
+                 或建立关键词黑名单，命中时自动暂停发布并发送告警
+                 （来源：Agorapulse 社交媒体自动化最佳实践，obbserv.com）"
 
 # === 元数据 ===
 source: manual

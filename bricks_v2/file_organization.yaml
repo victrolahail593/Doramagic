@@ -144,6 +144,34 @@ constraints:
   - "【社区经验】macOS HFS+ 与 Linux ext4 Unicode 规范化差异导致同名文件在跨平台同步后出现重复：
      macOS 用 NFD（分解式），Linux 用 NFC（组合式），同一中文文件名在云同步后变成两个文件；
      统一用 unicodedata.normalize('NFC', filename) 规范化后再比较文件名（来源：Python pathlib docs）"
+  - "【社区经验】shutil.copy() 和 shutil.copy2() 在 POSIX 平台不保留文件 owner/group/ACL：
+     copy 后文件 owner 变为运行脚本的用户，ACL 丢失；备份/迁移场景需改用 shutil.copytree(copy_function=shutil.copy2)
+     + 手动设置权限，或使用 rsync -a（来源：Python shutil 文档）"
+  - "【社区经验】perceptual hash 对旋转/裁剪/明显色调变换的图片会产生截然不同的 hash：
+     同一图片 90 度旋转后 pHash 差异可能超过汉明距离阈值 8，被误判为不同图片；
+     对轻度变换图片的去重需降低汉明阈值（<=4）并结合多种 hash 算法投票（来源：benhoyt.com duplicate-image-detection）"
+  - "【社区经验】大目录遍历时 pathlib.rglob('*') 会一次性展开所有路径到内存，100 万文件时内存峰值超 2GB：
+     改用 os.scandir() 配合自定义深度限制的生成器，按需逐层展开目录；
+     或使用 pathlib.Path.iterdir() 替代 rglob，仅递归需要的层级（来源：Python docs pathlib）"
+  - "【社区经验】EXIF DateTimeOriginal 无时区信息，旅行拍摄的照片时间戳混乱：
+     DateTimeOriginal 是设备本地时间，不带时区偏移；跨时区拍摄后整理时按日期排序会出现乱序；
+     可读取 GPS 坐标反查拍摄地时区（pytz.timezone），或要求用户在重命名前手动确认时区偏移
+     （来源：exiftool.org/forum）"
+  - "【社区经验】多个 EXIF 日期标签（DateTimeOriginal/SubSecDateTimeOriginal/CreateDate）值不一致：
+     相机厂商写入多个日期标签时值可能不同步；应优先使用 SubSecDateTimeOriginal（含亚秒精度），
+     降级到 DateTimeOriginal，最后才用 st_mtime（来源：photoprism/photoprism #2320）"
+  - "【社区经验】PyExifTool 在 Windows 上抛 'OSError: WinError 10038'（非 socket 对象）：
+     PyExifTool 底层用 socket 通信，Windows 某些 Python 版本存在兼容问题；
+     改用 subprocess.run(['exiftool', ...]) 直接调用命令行而非 Python 包装层（来源：PyExifTool PyPI）"
+  - "【社区经验】整理脚本与 iCloud/OneDrive/Dropbox 同时运行产生 'file not found' 堆积：
+     move 操作和云同步的上传队列竞争同一文件，导致云同步报错并在事件日志中产生大量报错；
+     整理前暂停云同步进程或将目标目录排除在同步范围外（来源：Apple 安全编程指南）"
+  - "【社区经验】dedup 时 MD5 碰撞虽极罕见，对恶意构造文件库存在风险：
+     对可信度低的文件来源（用户上传、外部共享文件夹），改用 SHA-256 而非 MD5；
+     两文件 hash 相同前提下再对比文件大小作双重确认（来源：SEI CERT C 安全编码规范）"
+  - "【社区经验】在 NFS/SMB 网络文件系统上批量重命名时，文件锁和延迟导致 rename 成功但后续读取失败：
+     网络文件系统的 inode 同步延迟可达数秒；rename 后立即 verify（检查目标路径存在）；
+     批量操作时建议先在本地操作再同步到网络位置（来源：Python bugs.python.org #46317）"
 
   - |
       【API 资源库】可用的公开 API：
@@ -188,6 +216,20 @@ common_failures:
       文件被移走后同步工具仍尝试上传原路径导致 'file not found' 错误大量堆积"
     mitigation: "整理操作前暂停或排除 cloud sync 目录；或先 copy 到目标路径再删除源文件，
       而非直接 move（来源：Apple 安全编程指南）"
+  - severity: MEDIUM
+    pattern: "【社区经验】shutil.copy() 在 POSIX 上丢失文件 owner/ACL，备份归档后权限丢失"
+    mitigation: "需要保留权限时使用 shutil.copy2() + os.chown() 手动恢复，或改用 rsync -a；
+      在 dry_run 输出中明确提示'本工具不保留 ACL 权限'（来源：Python shutil 文档）"
+  - severity: MEDIUM
+    pattern: "【社区经验】perceptual hash 汉明距离阈值 <=8 对旋转/裁剪图片产生大量漏检（相似图误判为不同）"
+    mitigation: "对相似度敏感的场景（如照片整理）降低阈值至 <=4；
+      对轻微变换的图片结合多算法（pHash + aHash + dHash）投票，至少 2/3 算法判相似才标记为重复
+      （来源：benhoyt.com duplicate-image-detection）"
+  - severity: LOW
+    pattern: "【社区经验】exiftool 在 Windows PATH 未设置时 subprocess.run 抛出 FileNotFoundError，
+      但错误信息不明确，开发者误以为文件路径有问题"
+    mitigation: "优先用 shutil.which('exiftool') 检测可用性并输出友好提示；
+      Windows 用户需将 exiftool.exe 所在目录加入 PATH 或提供 exiftool_path 配置参数（来源：exiftool.org FAQ）"
 
 # === 元数据 ===
 source: manual

@@ -144,6 +144,40 @@ constraints:
   - "【社区经验】UTF-8 BOM 编码 CSV（Windows Excel 导出默认格式）导致首列名有隐藏字符：
      pd.read_csv() 读取后第一列名变为 '\\ufeffColumnName'，导致后续 df['ColumnName'] 报 KeyError；
      读取时使用 encoding='utf-8-sig' 自动剥离 BOM，或用 charset_normalizer 自动检测（来源：pandas docs）"
+  - "【社区经验】openpyxl 保存含合并单元格边框的文件后边框样式被破坏：
+     load + save 操作后合并区域的边框样式大多丢失，这是 openpyxl 已知 bug；
+     若文件需保留边框样式，建议只读取数据（read_only=True）不回写，或使用 xlsxwriter 重建文件
+     （来源：openpyxl users group）"
+  - "【社区经验】openpyxl 含注释（comments）的工作簿保存第二次时报错：
+     第一次 save() 成功，再次 load + save 同一文件时因注释 XML 结构重复注册抛出异常；
+     有注释的文件在处理后重命名输出（_updated.xlsx），不覆盖原文件（来源：openpyxl changelog #206）"
+  - "【社区经验】openpyxl data_only=True 读取公式单元格只返回上次 Excel 打开时的缓存值，
+     若文件从未用 Excel 打开过（如服务端生成）则返回 None：
+     服务端处理 xlsx 时不应依赖 data_only 缓存值；需要公式计算结果时改用 xlcalculator 或 openpyxl-formula
+     （来源：openpyxl docs data_only 说明）"
+  - "【社区经验】Excel 从一个工作簿复制单元格到另一个工作簿时 openpyxl 抛异常：
+     不支持跨 workbook 对象的 cell/row 复制；必须手动读取值再写入目标 workbook；
+     不要直接 append(source_ws['A1:Z1000'])（来源：openpyxl docs cross-workbook）"
+  - "【社区经验】Google Sheets API 单次 batchUpdate 请求体超过 2MB 触发 413 错误：
+     大批量写入（>1000 行）时应将请求拆分为每批最多 500 行；
+     每行数据量较大（含长文本）时进一步减小批大小（来源：developers.google.com/sheets/api/limits）"
+  - "【社区经验】pandas 低内存模式（low_memory=True，默认）在混合类型列中猜测 dtype 不稳定：
+     同一列的前 10 万行全是数字，后面出现字符串，导致 dtype 变为 object，后续数值运算报错；
+     指定 dtype={'列名': str} 或在 read_csv 时设置 low_memory=False 来稳定推断（来源：pandas docs）"
+  - "【社区经验】CSV 中 'None'/'NULL'/'NA' 字符串被 pandas 自动转换为 NaN，导致原始值丢失：
+     某些业务字段（如状态码 'NA' = North America）被误识别为空值；
+     使用 na_values=[] 或 keep_default_na=False 禁用默认 NaN 识别，手动声明哪些值是空（来源：pandas read_csv docs）"
+  - "【社区经验】Excel serial date（序列日期）在不同 Excel 版本间有 1900/1904 日期系统差异：
+     Mac 版 Excel 历史上使用 1904-01-01 作为 origin（而非 1900-01-01），同样数字在 Windows/Mac 间相差 4 年；
+     转换时检查文件是否有 1904 标志（ws.sheet_format.defaultDate1904），相应切换 origin
+     （来源：openpyxl datetime 处理文档）"
+  - "【社区经验】Google Sheets API 服务账号 JSON 包含换行符的私钥在环境变量传递时被截断：
+     os.environ['GOOGLE_SERVICE_ACCOUNT_JSON'] 读取时若私钥 \\n 被 shell 转义，认证失败报 'Invalid PEM'；
+     使用 base64 编码环境变量，读取时 base64.b64decode 解码再 json.loads（来源：Google Cloud auth 文档）"
+  - "【社区经验】CSV formula injection（公式注入）Microsoft Excel 会在重新保存时移除单引号前缀防护：
+     常见的 \"'\" + 前缀方案在用户保存文件后失效，原公式重新激活；
+     更安全的方案是写入时使用 valueInputOption='RAW'（Google Sheets）或对所有以 =+- 开头的值加空格前缀
+     （来源：OWASP CSV Injection + Cyber Chief 2024）"
 
   - |
       【API 资源库】可用的公开 API：
@@ -187,6 +221,24 @@ common_failures:
       导致 df['列名'] 报 KeyError，排查困难"
     mitigation: "固定用 encoding='utf-8-sig' 读取 CSV（可同时兼容有/无 BOM 的文件）；
       在 data cleaning 阶段对所有列名执行 df.columns = df.columns.str.strip()（来源：pandas docs）"
+  - severity: HIGH
+    pattern: "【社区经验】CSV formula injection 的单引号前缀防护在 Excel 重新保存后失效，
+      公式重新激活可能导致代码执行或数据外泄"
+    mitigation: "对所有以 =+-@ 开头的值在前面加一个空格字符（' '+value）而非单引号；
+      或使用 valueInputOption='RAW' 向 Google Sheets 写入（来源：OWASP CSV Injection 2024）"
+  - severity: MEDIUM
+    pattern: "【社区经验】openpyxl data_only=True 在服务端生成的文件中返回 None，
+      因为文件从未被 Excel 打开过，公式结果缓存不存在"
+    mitigation: "服务端不要依赖 data_only 读取计算结果；需要公式结果时用 xlcalculator 库手动计算；
+      或在文件创建时就只写入数值而非公式（来源：openpyxl 文档）"
+  - severity: MEDIUM
+    pattern: "【社区经验】pandas 默认 NaN 识别将业务字段 'NA'/'NULL'/'None' 等有效字符串值转为 NaN"
+    mitigation: "read_csv/read_excel 时显式设置 na_values=[] 或 keep_default_na=False；
+      或在读取后用 df.fillna('') 配合业务逻辑单独处理真正的空值（来源：pandas IO 文档）"
+  - severity: LOW
+    pattern: "【社区经验】openpyxl 含注释的工作簿第二次 save() 时崩溃，无法正常覆盖保存"
+    mitigation: "处理流程改为：读取 → 修改 → 写入新文件（加 _updated 后缀）；
+      不要重复保存同一 workbook 对象（来源：openpyxl 已知 bug）"
 
 # === 元数据 ===
 source: manual
