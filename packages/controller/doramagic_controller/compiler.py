@@ -6,6 +6,9 @@
 - 无 LLM 时走降级模式（正则意图解析 + 模板填充），确保管道始终可运行
 - 沙箱验证只做语法 + 导入检查，不执行完整脚本（避免副作用）
 - 重试带 traceback 反馈，最多 3 次
+- clarify() 方法实现苏格拉底式需求挖掘，自适应交互深度
+- compile() 支持 progress_callback 过程反馈（工厂透明）
+- CompileResult 包含 capabilities/limitations/risk_report/evidence_sources 边界标注
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ import logging
 import re
 import subprocess
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -66,7 +70,10 @@ class VerificationResult(BaseModel):
 
 
 class CompileResult(BaseModel):
-    """编译结果。"""
+    """编译结果。
+
+    包含生成的代码、匹配积木信息、验证结果，以及交付物边界标注（产品宪法第五条要求）。
+    """
 
     success: bool
     code: str
@@ -75,6 +82,26 @@ class CompileResult(BaseModel):
     constraint_count: int
     verification: VerificationResult
     warnings: list[str] = []
+    # 交付物边界标注——让用户清楚工具能做什么、不能做什么
+    capabilities: list[str] = []       # 这个工具能做什么（从积木 core_capability 提取）
+    limitations: list[str] = []        # 这个工具不能做什么（HIGH 级失败模式）
+    risk_report: str = ""              # 风险/DSD 报告（聚合所有失败模式）
+    evidence_sources: list[str] = []   # 知识来源溯源（积木 evidence_refs）
+
+
+class ClarifyResult(BaseModel):
+    """苏格拉底对话需求挖掘结果。
+
+    记录挖掘过程中产生的问题、用户答案，以及澄清后的完整需求。
+    当前为单轮模式（生成问题列表 + 默认答案），后续支持真正的多轮对话。
+    """
+
+    clarified_input: str           # 澄清后的完整需求描述
+    confirmation: str              # "我理解你需要：xxx，对吗？" 确认文本
+    questions_asked: list[str]     # 问过的问题列表
+    answers: list[str]             # 对应的回答（单轮模式下为默认选项）
+    intent: dict[str, Any]         # 解析的意图结构
+    ready_to_compile: bool         # 是否可以进入编译阶段
 
 
 class PersonalizationCompiler:
@@ -106,19 +133,103 @@ class PersonalizationCompiler:
         self.memory_manager = memory_manager
         self.llm_model = llm_model
 
-    async def compile(self, user_input: str, user_id: str = "default") -> CompileResult:
-        """主编译流程。
+    async def clarify(self, user_input: str, user_id: str = "default") -> ClarifyResult:
+        """苏格拉底式需求挖掘。
+
+        分析用户输入中缺少的关键参数，生成选择题并用默认答案填充，
+        最终产出澄清后的完整需求描述和确认文本。
+
+        自适应交互深度（根据用户画像的 technical_level）：
+        - advanced（技术专家）：0 轮追问，直接确认
+        - intermediate（中级）：1-2 条选择题
+        - beginner / unknown（新手 / 未知）：最多 5 条选择题
+
+        当前为单轮模式：生成问题列表 + 默认答案，自动组合为澄清后的需求。
+        后续支持真正的多轮对话（OpenClaw / Telegram 场景）。
+
+        Args:
+            user_input: 用户原始输入，如"帮我监控比特币价格"。
+            user_id: 用户标识，用于读取 technical_level，默认 "default"。
+
+        Returns:
+            ClarifyResult 包含澄清后的需求、确认文本、问答记录和解析意图。
+        """
+        # 加载用户画像，判断技术水平
+        user_profile = self._load_user_profile(user_id)
+        profile_dict = user_profile if isinstance(user_profile, dict) else (
+            user_profile.model_dump() if hasattr(user_profile, "model_dump") else {}
+        )
+        technical_level: str = profile_dict.get("technical_level", "unknown")
+
+        # 先做意图解析，确定缺失参数方向
+        intent = await self._parse_intent(user_input)
+
+        # 专家用户：直接确认，不追问
+        if technical_level == "advanced":
+            confirmation = f"我理解你需要：{user_input}，对吗？"
+            return ClarifyResult(
+                clarified_input=user_input,
+                confirmation=confirmation,
+                questions_asked=[],
+                answers=[],
+                intent=intent,
+                ready_to_compile=True,
+            )
+
+        # 根据技术水平决定最大问题数
+        max_questions = 2 if technical_level == "intermediate" else 5
+
+        # 根据意图生成缺失参数的选择题
+        questions, answers, extra_context = _generate_clarification_questions(
+            user_input, intent, max_questions=max_questions
+        )
+
+        # 将问答结果融合到需求描述中
+        clarified_input = _merge_clarification(user_input, questions, answers, extra_context)
+        confirmation = f"我理解你需要：{clarified_input}，对吗？"
+
+        return ClarifyResult(
+            clarified_input=clarified_input,
+            confirmation=confirmation,
+            questions_asked=questions,
+            answers=answers,
+            intent=intent,
+            ready_to_compile=True,
+        )
+
+    async def compile(
+        self,
+        user_input: str,
+        user_id: str = "default",
+        progress_callback: Callable[[str, float], None] | None = None,
+    ) -> CompileResult:
+        """主编译流程（工厂透明模式）。
+
+        在各关键节点通过 progress_callback 发射进度信息，让用户看到编译器正在做什么。
+        最终交付物包含能力边界标注（capabilities/limitations/risk_report/evidence_sources）。
 
         Args:
             user_input: 用户自然语言需求，如"监控比特币价格，超过 10 万发 Telegram 通知"。
             user_id: 用户标识，用于加载/更新用户画像，默认 "default"。
+            progress_callback: 进度回调函数，签名为 (message: str, progress: float) -> None。
+                progress 取值 0.0-1.0，None 表示不发射进度。
 
         Returns:
-            CompileResult 包含生成的代码、使用的积木、验证结果。
+            CompileResult 包含生成的代码、使用的积木、验证结果、交付物边界标注。
         """
         warnings: list[str] = []
 
+        def _emit(message: str, progress: float) -> None:
+            """内部进度发射辅助函数，安全地调用外部回调。"""
+            logger.info("[进度 %.0f%%] %s", progress * 100, message)
+            if progress_callback is not None:
+                try:
+                    progress_callback(message, progress)
+                except Exception as cb_err:
+                    logger.warning("progress_callback 抛出异常（已忽略）：%s", cb_err)
+
         # Step 1: 解析意图
+        _emit("正在分析你的需求...", 0.10)
         intent = await self._parse_intent(user_input)
         logger.info("意图解析完成：%s", intent)
 
@@ -126,6 +237,7 @@ class PersonalizationCompiler:
         user_profile = self._load_user_profile(user_id)
 
         # Step 3: 匹配积木
+        _emit("正在从知识库匹配相关积木...", 0.30)
         bricks = self._match_bricks(intent)
         matched_brick_ids = [b.id for b in bricks]
         logger.info("匹配积木 %d 个：%s", len(bricks), matched_brick_ids)
@@ -135,8 +247,13 @@ class PersonalizationCompiler:
 
         # Step 4: 构建约束 prompt
         constraint_prompt, constraint_count = self._build_constraint_prompt(bricks, user_profile)
+        _emit(
+            f"找到 {len(bricks)} 个相关知识积木，{constraint_count} 条约束",
+            0.50,
+        )
 
         # Step 5+7: LLM 生成代码，失败时带 traceback 重试（最多 3 次）
+        _emit("正在生成工具代码...", 0.70)
         code = ""
         verification = VerificationResult(passed=False, exit_code=-1)
         max_retries = 3
@@ -153,6 +270,7 @@ class PersonalizationCompiler:
                 break
 
             # Step 6: 沙箱验证
+            _emit("正在验证代码...", 0.85)
             verification = await self._verify_code(code)
             verification = verification.model_copy(update={"retries": attempt})
 
@@ -163,8 +281,15 @@ class PersonalizationCompiler:
             traceback_feedback = verification.stderr or "语法错误，请修复后重新生成"
             logger.warning("第 %d 次验证失败，准备重试：%s", attempt + 1, traceback_feedback[:200])
 
+        # Step 7.5: 生成交付物边界标注
+        capabilities, limitations, risk_report, evidence_sources = (
+            self._build_delivery_boundary(bricks)
+        )
+
         # Step 8: 更新用户画像
         self._update_user_profile(user_id, intent, matched_brick_ids)
+
+        _emit("工具生成完成！", 1.00)
 
         return CompileResult(
             success=verification.passed and bool(code.strip()),
@@ -174,6 +299,10 @@ class PersonalizationCompiler:
             constraint_count=constraint_count,
             verification=verification,
             warnings=warnings,
+            capabilities=capabilities,
+            limitations=limitations,
+            risk_report=risk_report,
+            evidence_sources=evidence_sources,
         )
 
     # -------------------------------------------------------------------------
@@ -322,6 +451,62 @@ class PersonalizationCompiler:
             )
         except Exception as e:
             logger.warning("更新用户画像失败（user_id=%s）：%s", user_id, e)
+
+    # -------------------------------------------------------------------------
+    # Step 2.5: 交付物边界标注
+    # -------------------------------------------------------------------------
+
+    def _build_delivery_boundary(
+        self,
+        bricks: list[Any],
+    ) -> tuple[list[str], list[str], str, list[str]]:
+        """从匹配到的积木自动生成交付物边界标注。
+
+        产品宪法第四条：明标边界，"这个工具能做 X，不能做 Y"。
+
+        Args:
+            bricks: 匹配到的 BrickV2 列表。
+
+        Returns:
+            (capabilities, limitations, risk_report, evidence_sources) 四元组：
+            - capabilities: 工具能做什么（从各积木 core_capability 提取）
+            - limitations: 工具不能做什么（仅提取 HIGH 级失败模式的 pattern）
+            - risk_report: 风险报告文本（聚合所有严重程度的失败模式）
+            - evidence_sources: 知识来源溯源 URL（去重后的 evidence_refs）
+        """
+        capabilities: list[str] = []
+        limitations: list[str] = []
+        risk_lines: list[str] = []
+        evidence_set: set[str] = set()
+        evidence_sources: list[str] = []
+
+        for brick in bricks:
+            # 能力：每个积木贡献一条 core_capability
+            if brick.core_capability:
+                capabilities.append(brick.core_capability)
+
+            # 失败模式：HIGH 级别进入 limitations，所有级别进入风险报告
+            for failure in brick.common_failures:
+                if failure.severity == "HIGH":
+                    limitations.append(failure.pattern)
+                risk_lines.append(
+                    f"[{failure.severity}][{brick.name}] {failure.pattern}"
+                    f" → 缓解方案：{failure.mitigation}"
+                )
+
+            # 知识溯源：去重保序
+            for ref in brick.evidence_refs:
+                if ref and ref not in evidence_set:
+                    evidence_set.add(ref)
+                    evidence_sources.append(ref)
+
+        # 组装风险报告文本
+        if risk_lines:
+            risk_report = "【风险与暗雷报告】\n" + "\n".join(risk_lines)
+        else:
+            risk_report = ""
+
+        return capabilities, limitations, risk_report, evidence_sources
 
     # -------------------------------------------------------------------------
     # Step 3: 匹配积木
@@ -596,6 +781,97 @@ def _extract_keywords(text: str) -> list[str]:
         if len(result) >= 8:
             break
     return result
+
+
+def _generate_clarification_questions(
+    user_input: str,
+    intent: dict[str, Any],
+    max_questions: int = 5,
+) -> tuple[list[str], list[str], list[str]]:
+    """根据意图分析用户输入的缺失参数，生成选择题及默认答案。
+
+    采用规则驱动而非 LLM，确保无 LLM 时同样可用（降级原则）。
+    生成的均为选择题（不是开放题），用户体验更清晰。
+
+    Args:
+        user_input: 用户原始输入。
+        intent: 解析后的意图字典。
+        max_questions: 最多生成的问题数量。
+
+    Returns:
+        (questions, answers, extra_context) 三元组：
+        - questions: 选择题列表
+        - answers: 对应的默认选项（取第一个选项）
+        - extra_context: 额外补充信息片段（用于合并到需求描述）
+    """
+    questions: list[str] = []
+    answers: list[str] = []
+    extra_context: list[str] = []
+
+    capability_type = intent.get("capability_type", "")
+    data_source = intent.get("data_source")
+    parameters = intent.get("parameters", {})
+
+    # 轮询类需求：检查是否缺少阈值
+    if capability_type == "poll" and "threshold_candidates" not in parameters:
+        # 检测到加密货币相关
+        if data_source == "stock_api" and re.search(
+            r"比特币|BTC|ETH|加密货币|crypto|bitcoin|ethereum", user_input, re.IGNORECASE
+        ):
+            q = "跌多少提醒你？A) 5% B) 10% C) 20% D) 自定义"
+            questions.append(q)
+            answers.append("10%")
+            extra_context.append("价格下跌 10% 时触发")
+        elif data_source == "stock_api":
+            q = "涨跌幅阈值是多少？A) 3% B) 5% C) 10% D) 自定义"
+            questions.append(q)
+            answers.append("5%")
+            extra_context.append("价格变动 5% 时触发")
+
+    # 检查频率是否已指定
+    if capability_type == "poll" and not re.search(
+        r"\d+\s*(?:分钟|小时|秒|min|hour|sec)", user_input, re.IGNORECASE
+    ):
+        if len(questions) < max_questions:
+            q = "检查频率是多少？A) 每 5 分钟 B) 每 15 分钟 C) 每 1 小时 D) 自定义"
+            questions.append(q)
+            answers.append("每 15 分钟")
+            extra_context.append("每 15 分钟检查一次")
+
+    # 通知类需求：检查通知方式
+    if not re.search(r"telegram|Telegram|邮件|email|系统通知|短信|SMS", user_input, re.IGNORECASE):
+        if len(questions) < max_questions:
+            q = "通过什么方式提醒？A) Telegram B) 邮件 C) 系统通知"
+            questions.append(q)
+            answers.append("Telegram")
+            extra_context.append("通过 Telegram 发送通知")
+
+    return questions[:max_questions], answers[:max_questions], extra_context[:max_questions]
+
+
+def _merge_clarification(
+    user_input: str,
+    questions: list[str],
+    answers: list[str],
+    extra_context: list[str],
+) -> str:
+    """将问答补充信息融合到原始需求中，生成澄清后的完整需求描述。
+
+    Args:
+        user_input: 用户原始输入。
+        questions: 问题列表（仅用于日志，不参与合并）。
+        answers: 对应的默认答案列表（未使用，合并用 extra_context）。
+        extra_context: 各问题对应的补充描述片段。
+
+    Returns:
+        澄清后的完整需求描述字符串。
+    """
+    if not extra_context:
+        return user_input
+
+    # 将所有补充上下文追加到原始输入后
+    supplements = "，".join(extra_context)
+    return f"{user_input.rstrip('，。')}，{supplements}"
 
 
 def _extract_code_block(response_text: str) -> str:
