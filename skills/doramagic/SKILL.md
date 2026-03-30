@@ -80,6 +80,30 @@ If the output has `"error": true`, show the error message and stop.
 **User:** "/dora-status"
 **Action:** Run the command with input "/dora-status" to check the latest run status
 
+## Compiler Mode (v13)
+
+When the user describes a personal need or want a tool built (without mentioning a specific GitHub project), use the compiler mode:
+
+### Step 1: Run compiler (async)
+```bash
+python3 {baseDir}/scripts/doramagic_compiler.py --async --input "{args}" --user-id "{userId}"
+```
+
+### Step 2: Check result
+```bash
+python3 {baseDir}/scripts/doramagic_compiler.py --status --user-id "{userId}"
+```
+
+The compiler will:
+1. Match knowledge bricks (2459 constraints, 424 failure patterns)
+2. Generate production-quality code with real-world pitfall prevention
+3. Verify the code in sandbox
+4. Save to ~/.doramagic/generated/
+
+### When to use Compiler vs Extractor
+- **Compiler mode**: User wants a TOOL ("帮我做一个盯盘工具", "I need a price monitor")
+- **Extractor mode**: User wants KNOWLEDGE from a specific project ("extract soul from FastAPI")
+
 ## Protocol
 
 - **Always run the script.** Do not skip execution or substitute your own analysis.
