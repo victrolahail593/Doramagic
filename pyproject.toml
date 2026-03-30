@@ -79,6 +79,7 @@ python_files = ["test_*.py"]
 "packages/extraction/doramagic_extraction/stage0.py" = ["B007"]
 "packages/extraction/doramagic_extraction/stage1_scan.py" = ["E501"]
 # --- shared_utils ---
+"packages/shared_utils/doramagic_shared_utils/brick_store.py" = ["E501"]
 "packages/shared_utils/doramagic_shared_utils/llm_adapter.py" = ["E501", "RUF005", "UP038"]
 "packages/shared_utils/doramagic_shared_utils/capability_router.py" = ["E402", "E501", "F821"]
 "packages/shared_utils/doramagic_shared_utils/runtime_paths.py" = ["SIM108"]
