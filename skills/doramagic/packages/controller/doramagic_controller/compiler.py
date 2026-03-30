@@ -22,8 +22,9 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from doramagic_shared_utils.brick_store import BrickStore
 from pydantic import BaseModel
+
+from doramagic_shared_utils.brick_store import BrickStore
 
 logger = logging.getLogger(__name__)
 
@@ -500,7 +501,10 @@ class PersonalizationCompiler:
                     evidence_sources.append(ref)
 
         # 组装风险报告文本
-        risk_report = "【风险与暗雷报告】\n" + "\n".join(risk_lines) if risk_lines else ""
+        if risk_lines:
+            risk_report = "【风险与暗雷报告】\n" + "\n".join(risk_lines)
+        else:
+            risk_report = ""
 
         return capabilities, limitations, risk_report, evidence_sources
 
@@ -719,7 +723,7 @@ class PersonalizationCompiler:
 
         try:
             result = subprocess.run(
-                ["python3", "-c", f"import ast; ast.parse(open({tmp_path!r}).read())"],
+                ["python3", "-c", f"import ast; ast.parse(open({repr(tmp_path)}).read())"],
                 capture_output=True,
                 text=True,
                 timeout=_SYNTAX_CHECK_TIMEOUT,
@@ -762,10 +766,7 @@ def _extract_keywords(text: str) -> list[str]:
         关键词列表，最多 8 个，长度 2-10 字符。
     """
     # 去除常见停用词后提取有意义词
-    stopwords = {
-        "的", "了", "和", "是", "在", "我", "有", "一个",
-        "需要", "一", "请", "帮我", "生成", "创建", "写",
-    }
+    stopwords = {"的", "了", "和", "是", "在", "我", "有", "一个", "需要", "一", "请", "帮我", "生成", "创建", "写"}
     # 提取中文词（2-6 字）和英文词（3-10 字）
     cn_words = re.findall(r"[\u4e00-\u9fff]{2,6}", text)
     en_words = re.findall(r"[A-Za-z]{3,10}", text)
@@ -828,25 +829,22 @@ def _generate_clarification_questions(
             extra_context.append("价格变动 5% 时触发")
 
     # 检查频率是否已指定
-    if (
-        capability_type == "poll"
-        and not re.search(r"\d+\s*(?:分钟|小时|秒|min|hour|sec)", user_input, re.IGNORECASE)
-        and len(questions) < max_questions
+    if capability_type == "poll" and not re.search(
+        r"\d+\s*(?:分钟|小时|秒|min|hour|sec)", user_input, re.IGNORECASE
     ):
-        q = "检查频率是多少？A) 每 5 分钟 B) 每 15 分钟 C) 每 1 小时 D) 自定义"
-        questions.append(q)
-        answers.append("每 15 分钟")
-        extra_context.append("每 15 分钟检查一次")
+        if len(questions) < max_questions:
+            q = "检查频率是多少？A) 每 5 分钟 B) 每 15 分钟 C) 每 1 小时 D) 自定义"
+            questions.append(q)
+            answers.append("每 15 分钟")
+            extra_context.append("每 15 分钟检查一次")
 
     # 通知类需求：检查通知方式
-    if (
-        not re.search(r"telegram|Telegram|邮件|email|系统通知|短信|SMS", user_input, re.IGNORECASE)
-        and len(questions) < max_questions
-    ):
-        q = "通过什么方式提醒？A) Telegram B) 邮件 C) 系统通知"
-        questions.append(q)
-        answers.append("Telegram")
-        extra_context.append("通过 Telegram 发送通知")
+    if not re.search(r"telegram|Telegram|邮件|email|系统通知|短信|SMS", user_input, re.IGNORECASE):
+        if len(questions) < max_questions:
+            q = "通过什么方式提醒？A) Telegram B) 邮件 C) 系统通知"
+            questions.append(q)
+            answers.append("Telegram")
+            extra_context.append("通过 Telegram 发送通知")
 
     return questions[:max_questions], answers[:max_questions], extra_context[:max_questions]
 

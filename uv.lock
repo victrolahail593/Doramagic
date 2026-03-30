@@ -22,7 +22,7 @@ wheels = [
 
 [[package]]
 name = "doramagic"
-version = "0.1.0"
+version = "12.3.3"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },
