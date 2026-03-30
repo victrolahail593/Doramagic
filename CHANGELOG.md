@@ -2,6 +2,26 @@
 
 All notable changes to Doramagic are documented in this file.
 
+## [12.4.2] - 2026-03-30
+
+### Knowledge Library Expansion
+- Knowledge bricks expanded from 1076 to 7904+ across 50 domains
+- New `education_learning` domain: adaptive learning, spaced repetition, knowledge graphs, assessment feedback, learning paths
+- 2223 failure bricks extracted and saved to `bricks_v2/migrated/failure_knowledge_extracted.jsonl`
+- `BRICK_CATALOG` updated to include all 50 domain entries
+
+### Compiler Architecture
+- Fixed `doramagic_compiler.py` YAML dependency issue (no longer requires PyYAML)
+- Compiler now outputs `constraint_prompt` for host LLM to consume — no longer calls LLM API internally
+- `CompileResult` dataclass gains `constraint_prompt` field
+- SKILL.md updated to reflect compiler mode flow (host LLM generates code using constraint_prompt)
+
+### Routing Improvement
+- `input_router.py` Socratic dialogue threshold raised: 0.7 → 0.85 (reduces unnecessary clarification rounds)
+
+### Product Constitution
+- Added §1.3 First Principles & Technical Excellence criteria to `PRODUCT_CONSTITUTION.md`
+
 ## [12.4.1] - 2026-03-30
 
 ### Architecture — Personalization Compiler
