@@ -33,13 +33,31 @@ Do NOT use this skill for:
 
 ## How to Use
 
-Run the pipeline with the user's input:
+### Step 1: Run the pipeline (async mode)
 
 ```bash
-python3 {baseDir}/scripts/doramagic_main.py --input "{args}" --run-dir ~/.doramagic/runs/
+python3 {baseDir}/scripts/doramagic_main.py --async --input "{args}" --run-dir ~/.doramagic/runs/
 ```
 
-The script outputs JSON. Show the `message` field to the user exactly as-is.
+The script returns immediately with a JSON message. Show the `message` field to the user.
+
+### Step 2: Check result (after ~2 minutes)
+
+Wait approximately 120 seconds, then check the result:
+
+```bash
+python3 {baseDir}/scripts/doramagic_main.py --input "/dora-status" --run-dir ~/.doramagic/runs/
+```
+
+Show the `message` field to the user. If `"completed": false`, wait another 60 seconds and check again (max 3 retries).
+
+### Status check
+
+When the user sends `/dora-status`:
+
+```bash
+python3 {baseDir}/scripts/doramagic_main.py --input "/dora-status" --run-dir ~/.doramagic/runs/
+```
 
 If the output has `"error": true`, show the error message and stop.
 
