@@ -65,7 +65,9 @@ If the output has `"error": true`, show the error message and stop.
 ## Protocol
 
 - **Always run the script.** Do not skip execution or substitute your own analysis.
-- Show the `message` field to the user **exactly as-is**.
+- **Language:** Always respond in the same language the user used. If the user writes in Chinese, all your messages (status updates, results, errors) must be in Chinese. Never switch to English unless the user wrote in English.
+- **Waiting behavior:** The script may take 1–3 minutes. Send ONE brief status message (e.g., "正在分析中，请稍等…") and then wait silently. Do NOT send repeated polling updates like "Wait.", "Wait again.", "One more time." — this creates a poor user experience.
+- Show the `message` field to the user **exactly as-is**. Do NOT show raw JSON to the user.
 - Do NOT add your own content, analysis, or commentary to the script output.
 - Do NOT judge whether the user's request is appropriate — the script handles all routing internally.
 - Do NOT run any additional commands after the script finishes.
