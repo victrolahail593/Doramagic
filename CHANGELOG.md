@@ -2,6 +2,45 @@
 
 All notable changes to Doramagic are documented in this file.
 
+## [12.4.1] - 2026-03-30
+
+### Architecture — Personalization Compiler
+- New product positioning: "Deliver results, not tools" — users get working outcomes, not code or SKILL.md files
+- SKILL.md rewritten as complete behavioral specification — host AI (OpenClaw/Claude Code) follows instructions, Doramagic provides knowledge and tool scripts
+- 4 lightweight scripts: `brick_match.py` (knowledge retrieval), `verify.py` (sandbox check), `deploy.py` (auto-deploy + first execution), `memory.py` (user profile)
+- Socratic dialogue for need clarification (adaptive depth: expert 0 rounds, beginner 3-5 rounds)
+- Process visibility ("factory transparency") at 6 progress checkpoints
+- Delivery boundary annotations (capabilities, limitations, risk report, evidence sources)
+
+### Knowledge Brick System v2
+- BrickV2 schema: structured envelope (for system retrieval) + natural language constraints (for LLM understanding)
+- BrickStore: SQLite + FTS5 full-text search + YAML offline fallback + auto-import
+- 98 bricks total: 25 scenario bricks + 21 migrated from v1 + 52 API catalog bricks
+- 2459 constraints, 424 failure patterns, 160+ community experience entries
+- 1436 public APIs indexed across 52 categories (from public-apis catalog)
+- 22 user scenario categories covering 80% of OpenClaw/Claude Code user needs
+
+### User Memory System
+- Short-term + long-term user profiles (`~/.doramagic/memory/`)
+- Technical level auto-inference from conversation
+- Domain interest extraction from matched bricks
+- Cross-session personalization via system prompt injection
+
+### Product Constitution
+- `PRODUCT_CONSTITUTION.md` established as immutable product principles document
+- 6 non-negotiable principles (deliver results, opinionated expert, visible capability, knowledge traceability, complete delivery, inject capability not process)
+- Version evolution history and architectural decisions recorded
+- All AI agents must read before modifying Doramagic
+
+### Security (Codex Review)
+- deploy.py: name whitelist prevents path traversal + XML injection + shell injection
+- deploy.py: stdout/stderr redaction for sensitive data (API keys, tokens)
+- deploy.py: split copied/scheduled status (no false success reports)
+- verify.py: renamed import_ok to syntax_ok (accurate semantics)
+- brick_match.py: init_db failure now exits instead of silent degradation
+- memory.py: strict boolean parsing for --success flag
+- SKILL.md: explicit prohibition of shell string concatenation with user input
+
 ## [12.3.3] - 2026-03-30
 
 ### Fixes
