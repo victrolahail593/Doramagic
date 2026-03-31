@@ -489,7 +489,7 @@ class BrickStore:
         return success_count
 
     @staticmethod
-    def _v1_to_v2(raw: dict, domain: str) -> "BrickV2":
+    def _v1_to_v2(raw: dict, domain: str) -> BrickV2:
         """将 v1 JSONL 积木转换为 v2 BrickV2 对象。
 
         映射规则：
@@ -523,11 +523,13 @@ class BrickStore:
         core_capability = ""
 
         if knowledge_type == "failure":
-            common_failures.append(FailurePattern(
-                severity="MEDIUM" if confidence == "medium" else "HIGH",
-                pattern=statement,
-                mitigation="",
-            ))
+            common_failures.append(
+                FailurePattern(
+                    severity="MEDIUM" if confidence == "medium" else "HIGH",
+                    pattern=statement,
+                    mitigation="",
+                )
+            )
         elif knowledge_type in ("capability",):
             core_capability = statement
         else:
