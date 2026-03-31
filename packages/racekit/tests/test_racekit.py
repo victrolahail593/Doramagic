@@ -77,7 +77,7 @@ class TestRaceBrief:
             1,
             "extraction.stage15_agentic",
             "Codex",
-            str(REPO_ROOT / "docs" / "dev-plan-codex-module-specs.md"),
+            str(REPO_ROOT / "docs" / "archive" / "legacy" / "dev-plan-codex-module-specs.md"),
         )
 
         content = brief_path.read_text(encoding="utf-8")

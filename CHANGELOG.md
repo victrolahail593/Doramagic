@@ -2,6 +2,36 @@
 
 All notable changes to Doramagic are documented in this file.
 
+## [13.0.0] - 2026-03-31
+
+### Architecture (BREAKING)
+- Split monolithic `/dora` skill (230 lines, 3 modes) into 5 single-responsibility skills:
+  - `/dora` — Router + Socratic dialogue (clarify intent, route to sub-skills)
+  - `/dora-match` — Brick matching only (Iron Law: no code without match)
+  - `/dora-build` — Code generation from constraints (Iron Law: every line follows constraint_prompt)
+  - `/dora-extract` — GitHub soul extraction (Iron Law: all phases sequential)
+  - `/dora-status` — Status query (read-only)
+- Each skill has an Iron Law preventing the host LLM from skipping critical steps
+- Skills communicate via session files (`~/.doramagic/sessions/latest.json`)
+
+### Added
+- `session_store.py` module: Pydantic-based session state management for inter-skill communication
+- `SessionState` model with typed fields for requirement, constraints, capabilities, limitations, risk report, evidence sources
+- 11 unit tests for session lifecycle (create → match → build flow)
+
+### Documentation
+- Added `docs/ARCHITECTURE.md` — comprehensive technical architecture document (9 chapters)
+- Added `docs/TECHNICAL_DIFFICULTIES.md` — 53 documented technical difficulties and lessons learned
+- Added `docs/research/2026-03-31-skill-architecture-rethink.md` — strategic analysis: "Are we building on the wrong foundation?"
+- Added `docs/designs/2026-03-31-skill-split-architecture.md` — design document for the skill split
+- Reorganized `docs/` directory: 110 historical files archived to `docs/archive/`, active docs reduced from 164 to 53
+- Rewrote `docs/DOC_INDEX.md` with current document inventory
+
+### Why
+- Real-world Telegram test (2026-03-31) proved the host LLM skips `doramagic_compiler.py` entirely when SKILL.md is too complex
+- 10,028 knowledge bricks were never used because the host LLM generated code from its own knowledge
+- Research confirmed: OpenClaw skills are purely advisory ("prompt injection"), not executable — splitting into single-responsibility skills is the only viable enforcement pattern within the platform
+
 ## [12.4.6] - 2026-03-30
 
 ### Security
