@@ -2,13 +2,21 @@
 name: dora-extract
 description: >
   Extract the "soul" of a GitHub project — design philosophy, failure patterns,
-  and community wisdom. Produces a knowledge package. Use when given a GitHub URL
-  or asked to "extract soul".
-version: 13.0.0
+  and community wisdom. Use when given a GitHub URL or asked to "extract soul".
+version: 13.1.0
 user-invocable: true
-license: MIT
-tags: [doramagic, soul-extraction]
-metadata: {"openclaw":{"emoji":"🔮","skillKey":"dora-extract","category":"builder","requires":{"bins":["python3","git"]}}}
+license: MIT-0
+metadata:
+  openclaw:
+    emoji: "🔮"
+    skillKey: dora-extract
+    category: builder
+    requires:
+      bins: [python3, git, doramagic]
+    install:
+      - kind: uv
+        package: "doramagic @ git+https://github.com/tangweigang-jpg/Doramagic.git@v13.1.0"
+        bins: [doramagic]
 ---
 
 # Doramagic — Soul Extractor

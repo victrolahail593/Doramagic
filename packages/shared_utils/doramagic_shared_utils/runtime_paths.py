@@ -147,12 +147,24 @@ def resolve_bricks_dir(
             return p
         logger.warning("DORAMAGIC_BRICKS_DIR=%s is not a valid directory", env_val)
 
-    # 3. root/bricks/
+    # 3. root/bricks/ or root/knowledge/bricks/
     if root is not None:
-        candidate = root / "bricks"
-        if candidate.is_dir():
-            logger.debug("bricks_dir resolved under root: %s", candidate)
-            return candidate
+        for subpath in ("knowledge/bricks", "bricks"):
+            candidate = root / subpath
+            if candidate.is_dir():
+                logger.debug("bricks_dir resolved under root: %s", candidate)
+                return candidate
+
+    # 4. pip-installed package data (doramagic_knowledge/bricks/)
+    try:
+        from importlib.resources import files
+
+        pkg_bricks = files("doramagic_knowledge") / "bricks"
+        if pkg_bricks.is_dir():  # type: ignore[union-attr]
+            logger.debug("bricks_dir from pip package data: %s", pkg_bricks)
+            return Path(str(pkg_bricks))
+    except (ImportError, TypeError, FileNotFoundError, ModuleNotFoundError):
+        pass
 
     return None
 

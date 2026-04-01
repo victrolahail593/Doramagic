@@ -26,7 +26,7 @@
 - 不要只推 git tag 而不创建 GitHub Release（因为用户在 Releases 页面看不到版本信息，发现于 2026-03-29）
 - 不要用中文写 GitHub 上的 commit message 和文档（因为 GitHub 是面向国际社区的正式发布仓库，规范要求英文，发现于 2026-03-29）
 - 不要发布时只更新 pyproject.toml 版本号（因为 SKILL.md、README.md、marketplace.json 也有版本号，不同步会导致用户困惑，发现于 2026-03-29）
-- 不要发布后不同步 skills/doramagic/packages/ 副本（因为 skill 运行时用的是副本不是主包，副本落后等于用户装了旧代码，发现于 2026-03-29）
+- ~~不要发布后不同步 skills/doramagic/packages/ 副本~~ 已解决：v13.1.0 起 Python 代码通过 pip 包分发，skill 目录不再包含 packages/ 副本（修复于 2026-04-01）
 - 不要让 publish_preflight.sh 和 publish_to_github.sh 的排除列表不同步（因为预检会误报，或发布会遗漏清理，发现于 2026-03-29）
 - 不要忘记发布到 ClawHub（因为 GitHub push 不等于 ClawHub 更新，用户通过 clawhub install 拿到的是 ClawHub 版本，发现于 2026-03-29）
 - 不要只发布到一个 ClawHub slug（因为历史原因 "dora" 和 "doramagic" 两个 slug 都有用户安装，必须双发布，发现于 2026-03-29）
@@ -57,6 +57,10 @@
 - 不要在 setup_packages_path 的开发者布局检测中只判断 packages/ 和 skills/doramagic/ 是否存在（因为 ~/.openclaw/ 会同时含有旧版残留，应额外验证 pyproject.toml 或 Makefile 才算真正的开发目录，发现于 2026-03-29）
 - 不要在 _brick_catalog_dir 中把 skills/doramagic/bricks/ 路径排在 bricks/ 之前（因为安装模式下 skills/doramagic/ 不存在，会解析到错误路径；应优先检查 DORAMAGIC_BRICKS_DIR 环境变量，发现于 2026-03-29）
 - 不要在相关性过滤器中只用英文关键词匹配（因为 GitHub 返回的中文描述仓库会被误过滤；非 ASCII 字符占比高时应直接放行，信任 GitHub 搜索排序，发现于 2026-03-29）
+- 不要在 flow_controller.py 中用 Path(__file__).parents[N] 硬编码路径加载其他包的模块（因为 pip install 后 site-packages 布局与开发布局不同，parents[2] 会指向错误目录；应改用标准 import，发现于 2026-04-01）
+- 不要在 hatchling 多包配置下使用 editable install（因为 hatchling 对多路径 packages 的 editable 模式支持有限，只有 wheel install 正常工作，发现于 2026-04-01）
+- 不要把 doramagic_product.__init__ 中重量级 import 放在模块级（因为 pipeline.py 有断裂依赖 run_skill_compiler，会导致整个包 import 失败；应用 lazy import __getattr__ 模式，发现于 2026-04-01）
+- 不要在 pip 包的 CLI 中无条件调用 os.fork()（因为 Windows 没有 fork，pip 包面向所有平台；应加 sys.platform 检查，发现于 2026-04-01 代码审查）
 
 ## 知识库结构
 

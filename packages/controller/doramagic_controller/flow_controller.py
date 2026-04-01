@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import contextlib
-import importlib.util
 import logging
 import os
-import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -17,22 +15,11 @@ from doramagic_contracts.budget import BudgetPolicy
 from doramagic_contracts.envelope import ModuleResultEnvelope, RunMetrics, WarningItem
 from doramagic_contracts.executor import ExecutorConfig, PhaseExecutor
 from doramagic_contracts.skill import CompileBundleContract
-
-_BRICK_STITCHER_PATH = (
-    Path(__file__).resolve().parents[2] / "executors" / "doramagic_executors" / "brick_stitcher.py"
+from doramagic_executors.brick_stitcher import (
+    match_brick_categories,
+    run_brick_stitch,
+    select_bricks,
 )
-_brick_stitcher_spec = importlib.util.spec_from_file_location(
-    "doramagic_controller._brick_stitcher", _BRICK_STITCHER_PATH
-)
-if _brick_stitcher_spec is None or _brick_stitcher_spec.loader is None:
-    raise ImportError(f"Unable to load brick stitcher from {_BRICK_STITCHER_PATH}")
-_brick_stitcher_module = importlib.util.module_from_spec(_brick_stitcher_spec)
-sys.modules[_brick_stitcher_spec.name] = _brick_stitcher_module
-_brick_stitcher_spec.loader.exec_module(_brick_stitcher_module)
-
-match_brick_categories = _brick_stitcher_module.match_brick_categories
-run_brick_stitch = _brick_stitcher_module.run_brick_stitch
-select_bricks = _brick_stitcher_module.select_bricks
 
 from .budget_manager import BudgetManager
 from .event_bus import EventBus

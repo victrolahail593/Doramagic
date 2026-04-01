@@ -4,9 +4,11 @@
 
 ---
 
-## 开发前必读（CRITICAL）
+## 产品灵魂（CRITICAL）
 
-**`PRODUCT_CONSTITUTION.md`** — 产品宪法。记录不可动摇的产品原则、版本演进历史、已确定的技术决策。任何修改 Doramagic 的 AI agent 必须先读此文件，禁止遗漏已有功能。
+- **Doramagic 原则**：永远不教用户做事，给他工具
+- **Doramagic 定位**：AI 领域的抄作业大师，善于从 GitHub 开源项目、skill、用户在 AI 领域的各种实践经验中提取知识
+- 详细产品宪法见 `PRODUCT_CONSTITUTION.md`（新增功能或架构变更时必读）
 
 ---
 
@@ -47,37 +49,27 @@ make test       # pytest tests/ packages/
 - 新增 brick 后更新 `packages/extraction/doramagic_extraction/brick_injection.py` 的框架映射
 - 直接编辑 `knowledge/bricks/*.jsonl`（或通过 bricks_v2/ 编译写入）
 
-### 发布（完整流程，不可跳步）
+### 发布
 
-```bash
-# 1. 版本号同步（pyproject.toml + SKILL.md + README.md + marketplace.json）
-# 2. skills/doramagic/packages/ 副本同步（rsync）
-# 3. make check 全通过
-bash scripts/publish_preflight.sh                     # 4. 预检
-bash scripts/release/publish_to_github.sh vX.Y.Z --dry-run  # 5. 试运行
-bash scripts/release/publish_to_github.sh vX.Y.Z            # 6. 正式发布（含 GitHub + ClawHub）
-# 7. 在 GitHub 创建 Release（英文 release notes）
-# 8. 写开发日志 + 更新踩坑记录
-```
-
-发布脚本自动执行：GitHub push + tag + ClawHub publish。
-ClawHub slug: `dora`（不是 doramagic）
-GitHub 远程: `https://github.com/tangweigang-jpg/Doramagic.git`
+完整 8 步流程见 `scripts/release/README.md`，不可跳步。ClawHub slug: `dora`。
 
 ### 已知技术债
 
 - `packages/orchestration/` 是旧版 PhaseRunner，已被 `packages/controller/` 取代，待废弃
-- `skills/doramagic/packages/` 是手动维护的副本，发布前须同步
+- ~~`skills/doramagic/packages/` 副本~~ 已解决：v13.1.0 起通过 pip 包分发
 - 6 组测试在 `make test` 中被 `--ignore`，需逐步恢复
 
-### 开发前必读
+### 踩雷检查（CRITICAL）
 
-- `docs/pitfalls.md` — 踩坑记录
-- `TODOS.md` — 待办与安全发现
-- `docs/rules/01-global-engineering-rules-v1.md` — 全局工程规则（Google × Claude）
-- `docs/rules/02-doramagic-product-rules-v1.md` — Doramagic 产品规则（基于踩坑）
-- `docs/rules/03-discussion-checklist-v1.md` — 需要与 CEO 讨论的决策清单
+涉及已知问题域（LLM 调用、积木体系、发布流程、contracts 变更）时，先查阅 `docs/pitfalls.md` 确认是否有相关踩坑经验。不重复踩已知的坑。
+
+### 工程纪律
+
+- 任何代码改动前先做**变更影响评估**（影响哪些包、哪些下游）
+- 复杂任务主动拆解，用 Sub-agents 并行处理
+- 优先使用 Plan Mode：先输出计划，确认后再动代码
+- 每次重大任务结束后做 post-mortem，提取教训更新 `docs/pitfalls.md`
 
 ---
 
-*最后更新: 2026-03-29*
+*最后更新: 2026-04-01*
