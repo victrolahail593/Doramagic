@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Doramagic one-line installer
+# Doramagic one-line installer (v13.3.1+)
 # Usage: curl -fsSL https://raw.githubusercontent.com/tangweigang-jpg/Doramagic/main/install.sh | bash
 #
 # Detects OpenClaw / Claude Code and installs Doramagic as a skill.

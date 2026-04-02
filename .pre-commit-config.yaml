@@ -1,3 +1,4 @@
+# Pre-commit hooks — run automatically on git commit
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.8
