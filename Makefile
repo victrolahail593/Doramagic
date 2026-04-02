@@ -1,3 +1,4 @@
+# Doramagic build targets — run `make check` before committing
 .PHONY: lint format typecheck test check clean
 
 PACKAGES_PATH = packages/contracts:packages/extraction:packages/shared_utils:packages/community:packages/cross_project:packages/skill_compiler:packages/orchestration:packages/platform_openclaw:packages/domain_graph:packages/controller:packages/executors:packages/racekit:packages/evals:packages/preextract_api:packages/doramagic_product

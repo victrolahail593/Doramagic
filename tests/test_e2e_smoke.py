@@ -1,4 +1,4 @@
-"""E2E smoke tests for Doramagic v12.1.1 pipeline.
+"""E2E smoke tests for Doramagic pipeline.
 
 Tests 4 routing paths:
   1. DIRECT_URL: GitHub URL -> skip Discovery -> extract
