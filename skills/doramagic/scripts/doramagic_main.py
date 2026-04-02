@@ -185,30 +185,9 @@ def main() -> None:
         run_id = f"run-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
         run_dir = run_base / run_id
 
-    # --async 模式：fork 到后台，立即返回 run_id
-    if args.async_mode:
-        run_dir.mkdir(parents=True, exist_ok=True)
-        pid = os.fork()
-        if pid > 0:
-            # 父进程：立即返回
-            print(json.dumps({
-                "message": (
-                    f"✨ 正在后台分析中，预计需要 1-3 分钟。\n\n"
-                    f"运行编号: `{run_dir.name}`\n\n"
-                    f"完成后可用 `/dora-status` 查看结果。"
-                ),
-                "run_id": run_dir.name,
-                "async": True,
-            }, ensure_ascii=False))
-            return
-        else:
-            # 子进程：关闭 stdout/stderr，静默运行 pipeline
-            sys.stdout = open(os.devnull, "w")
-            sys.stderr = open(run_dir / "stderr.log", "w")
-            os.setsid()
-
     # Register all phase executors
     from doramagic_executors import ALL_EXECUTORS
+    from doramagic_controller.state_definitions import Phase
 
     executors = {name: cls() for name, cls in ALL_EXECUTORS.items()}
 
@@ -220,7 +199,55 @@ def main() -> None:
         budget_policy=BudgetPolicy(),
     )
 
-    # Run
+    # --async: run PHASE_A synchronously (fast), then fork for the rest
+    if args.async_mode:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            result = asyncio.run(
+                controller.run(
+                    user_input=args.input,
+                    resume_run_id=args.continue_run,
+                    phase_gate=Phase.PHASE_A,
+                )
+            )
+        except Exception as e:
+            print(json.dumps({"message": f"Fatal error: {e}", "error": True}))
+            sys.exit(1)
+
+        if result.phase.value == "PHASE_A_CLARIFY":
+            # Clarification needed — already sent via adapter, exit normally
+            return
+
+        if result.phase.value in ("DONE", "DEGRADED", "ERROR"):
+            # Pipeline finished during PHASE_A (unlikely but handle it)
+            _output_result(result, run_dir, adapter)
+            return
+
+        # PHASE_A passed — fork for remaining phases
+        pid = os.fork()
+        if pid > 0:
+            print(json.dumps({
+                "message": (
+                    f"✨ 正在后台锻造中，预计需要 1-3 分钟。\n\n"
+                    f"运行编号: `{run_dir.name}`\n\n"
+                    f"完成后可用 `/dora-status` 查看结果。"
+                ),
+                "run_id": run_dir.name,
+                "async": True,
+            }, ensure_ascii=False))
+            return
+        else:
+            sys.stdout = open(os.devnull, "w")
+            sys.stderr = open(run_dir / "stderr.log", "w")
+            os.setsid()
+            try:
+                result = asyncio.run(controller.resume())
+            except Exception:
+                sys.exit(1)
+            _output_result(result, run_dir, adapter)
+            return
+
+    # Synchronous mode (CLI / non-async)
     try:
         result = asyncio.run(
             controller.run(
@@ -235,7 +262,11 @@ def main() -> None:
         print(json.dumps({"message": f"Fatal error: {e}", "error": True}))
         sys.exit(1)
 
-    # Output result
+    _output_result(result, run_dir, adapter)
+
+
+def _output_result(result, run_dir: Path, adapter) -> None:
+    """Handle pipeline result output."""
     if result.phase.value in ("DONE", "DEGRADED"):
         delivery_dir = run_dir / "delivery"
         artifacts = {}
