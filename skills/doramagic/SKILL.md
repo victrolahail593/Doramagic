@@ -35,6 +35,7 @@ Read `~/.openclaw/workspace/skills/dora/references/brick-catalog.md`
 
 ## Step 3: 将 Step 2 的内容写入文件
 
+确定 SKILL_KEY（仅限小写字母、数字、短横线，如 `travel-english-buddy`）。
 用 write 工具将以下格式的文件写入 `~/clawd/doramagic/generated/SKILL_KEY/SKILL.md`（write 自动创建目录，不要用 exec）。
 
 文件必须严格使用以下格式，用 Step 2 展示过的内容填充：

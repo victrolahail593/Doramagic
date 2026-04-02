@@ -15,7 +15,7 @@ metadata:
       bins: [python3, git, doramagic]
     install:
       - kind: uv
-        package: "doramagic @ git+https://github.com/tangweigang-jpg/Doramagic.git@v13.1.0"
+        package: "doramagic @ git+https://github.com/tangweigang-jpg/Doramagic.git@v13.3.1"
         bins: [doramagic]
 ---
 
@@ -31,7 +31,7 @@ Do not summarize or guess — run the extraction script and report its output.
 Tell the user: "Starting soul extraction... this may take a few minutes."
 
 ```bash
-python3 {baseDir}/scripts/doramagic_main.py --async --input "{github_url_or_description}" --run-dir ~/.doramagic/runs/
+python3 {baseDir}/scripts/doramagic_main.py --async --input "{github_url_or_description}" --run-dir ~/clawd/doramagic/runs/
 ```
 
 The script returns JSON immediately with a `message` field. Show it to the user.
@@ -43,7 +43,7 @@ The script returns JSON immediately with a `message` field. Show it to the user.
 Wait 120 seconds, then check status:
 
 ```bash
-python3 {baseDir}/scripts/doramagic_main.py --input "/dora-status" --run-dir ~/.doramagic/runs/
+python3 {baseDir}/scripts/doramagic_main.py --input "/dora-status" --run-dir ~/clawd/doramagic/runs/
 ```
 
 - If `"completed": true` → proceed to Step 3

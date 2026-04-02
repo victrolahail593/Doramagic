@@ -28,7 +28,6 @@ All notable changes to Doramagic are documented in this file.
 ### Removed
 - `hooks.PreToolUse` in SKILL.md (was exec-dependent)
 - `requires.bins: [python3, git]` from SKILL.md metadata
-- `SKILL-dora-build.md`, `SKILL-dora-match.md`, `SKILL-dora-status.md` (exec-dependent sub-skills)
 
 ### Fixed
 - `{baseDir}` not interpolated in SKILL.md body — switched to absolute paths
